@@ -1,0 +1,250 @@
+use glam::Vec2;
+use rand::Rng;
+use rand_pcg::Pcg64;
+use serde::{Deserialize, Serialize};
+use symbios_ground::HeightMap;
+
+use crate::graph::{RoadGraph, RoadType};
+use crate::spatial::{SpatialHash, TraceResult, resolve_trace_step};
+use crate::tensor::TensorField;
+
+/// Configuration for tensor-field city generation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TensorConfig {
+    pub seed: u64,
+    /// World-space distance per integration step.
+    pub step_size: f32,
+    /// Desired spacing between parallel major roads (avenues).
+    pub major_road_dist: f32,
+    /// Desired spacing between parallel minor roads (streets).
+    pub minor_road_dist: f32,
+    /// Snap radius for merging trace endpoints with existing geometry.
+    pub snap_radius: f32,
+    /// Maximum number of integration steps per trace before it is abandoned.
+    pub max_trace_steps: u32,
+}
+
+impl Default for TensorConfig {
+    fn default() -> Self {
+        Self {
+            seed: 42,
+            step_size: 2.0,
+            major_road_dist: 40.0,
+            minor_road_dist: 15.0,
+            snap_radius: 4.0,
+            max_trace_steps: 300,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Seed {
+    position: Vec2,
+    direction: Vec2,
+    road_type: RoadType,
+    /// Accumulated distance since the last orthogonal branch was spawned.
+    branch_accum: f32,
+    /// If set, reuse this existing node instead of creating a new one at `position`.
+    existing_node: Option<u32>,
+}
+
+/// Generates a [`RoadGraph`] by tracing streamlines through the tensor field
+/// derived from the given heightmap.
+pub fn generate_roads(heightmap: &HeightMap, config: &TensorConfig) -> RoadGraph {
+    let field = TensorField::new(heightmap);
+    let mut graph = RoadGraph::default();
+
+    let world_w = heightmap.world_width();
+    let world_d = heightmap.world_depth();
+    let cell_size = config.snap_radius * 2.0;
+    let mut spatial = SpatialHash::new(world_w, world_d, cell_size);
+
+    let mut rng = Pcg64::new(config.seed.into(), 0xa02bdbf7bb3c0a7_u128);
+
+    // --- Seed generation ---
+    // Drop seeds along a grid at `major_road_dist` spacing, jittered slightly.
+    let mut active: Vec<Seed> = Vec::new();
+
+    let margin = config.major_road_dist * 0.5;
+    let mut x = margin;
+    while x < world_w - margin {
+        let mut z = margin;
+        while z < world_d - margin {
+            let jitter_x: f32 = rng.random_range(-config.step_size..config.step_size);
+            let jitter_z: f32 = rng.random_range(-config.step_size..config.step_size);
+            let pos = Vec2::new(x + jitter_x, z + jitter_z);
+            let (major, minor) = field.sample(pos.x, pos.y);
+
+            // Create a shared starting node for all traces from this seed
+            let shared_node = graph.add_node(pos);
+            spatial.insert_node(shared_node, pos);
+
+            // Trace both directions along each axis to form full through-lines
+            for &dir in &[major, -major] {
+                active.push(Seed {
+                    position: pos,
+                    direction: dir,
+                    road_type: RoadType::Major,
+                    branch_accum: 0.0,
+                    existing_node: Some(shared_node),
+                });
+            }
+            for &dir in &[minor, -minor] {
+                active.push(Seed {
+                    position: pos,
+                    direction: dir,
+                    road_type: RoadType::Minor,
+                    branch_accum: 0.0,
+                    existing_node: Some(shared_node),
+                });
+            }
+
+            z += config.major_road_dist;
+        }
+        x += config.major_road_dist;
+    }
+
+    // --- Trace each seed ---
+    let bounds = Vec2::new(world_w, world_d);
+    while let Some(seed) = active.pop() {
+        trace_streamline(
+            &field,
+            &mut graph,
+            &mut spatial,
+            &mut active,
+            seed,
+            config,
+            bounds,
+        );
+    }
+
+    graph
+}
+
+fn trace_streamline(
+    field: &TensorField<'_>,
+    graph: &mut RoadGraph,
+    spatial: &mut SpatialHash,
+    active: &mut Vec<Seed>,
+    seed: Seed,
+    config: &TensorConfig,
+    bounds: Vec2,
+) {
+    let start_node = match seed.existing_node {
+        Some(id) => id,
+        None => {
+            let id = graph.add_node(seed.position);
+            spatial.insert_node(id, seed.position);
+            id
+        }
+    };
+
+    let mut current_node = start_node;
+    let mut dir = seed.direction;
+    let mut branch_accum = seed.branch_accum;
+
+    for _ in 0..config.max_trace_steps {
+        let current_pos = graph.node_pos(current_node);
+
+        // RK2 (midpoint method) integration through the tensor field
+        let mid = current_pos + dir * (config.step_size * 0.5);
+        let (field_major, field_minor) = field.sample(mid.x, mid.y);
+        let field_dir = match seed.road_type {
+            RoadType::Major => field_major,
+            RoadType::Minor => field_minor,
+        };
+
+        // Ensure consistent direction (avoid 180° flips between steps)
+        let field_dir = if field_dir.dot(dir) < 0.0 {
+            -field_dir
+        } else {
+            field_dir
+        };
+
+        dir = field_dir;
+        let proposed = current_pos + dir * config.step_size;
+
+        // Bounds check
+        if proposed.x < 0.0 || proposed.x >= bounds.x || proposed.y < 0.0 || proposed.y >= bounds.y
+        {
+            break;
+        }
+
+        match resolve_trace_step(
+            graph,
+            spatial,
+            current_pos,
+            proposed,
+            config.snap_radius,
+            current_node,
+        ) {
+            TraceResult::Clear(pos) => {
+                let new_node = graph.add_node(pos);
+                spatial.insert_node(new_node, pos);
+                let edge_id = graph.add_edge(current_node, new_node, seed.road_type);
+                spatial.insert_edge(edge_id, current_pos, pos);
+                current_node = new_node;
+            }
+            TraceResult::SnappedToNode(n_id) => {
+                // Avoid duplicate edges
+                let already_connected =
+                    graph.nodes[current_node as usize].edges.iter().any(|&eid| {
+                        let e = &graph.edges[eid as usize];
+                        e.active && (e.start == n_id || e.end == n_id)
+                    });
+                if !already_connected {
+                    let n_pos = graph.node_pos(n_id);
+                    let edge_id = graph.add_edge(current_node, n_id, seed.road_type);
+                    spatial.insert_edge(edge_id, current_pos, n_pos);
+                }
+                break;
+            }
+            TraceResult::SnappedToEdge {
+                edge_id,
+                intersection_pos,
+            } => {
+                let (mid_node, ea, eb) = graph.split_edge(edge_id, intersection_pos);
+                spatial.insert_node(mid_node, intersection_pos);
+
+                let old_start_pos = graph.node_pos(graph.edges[ea as usize].start);
+                let old_end_pos = graph.node_pos(graph.edges[eb as usize].end);
+                spatial.insert_edge(ea, old_start_pos, intersection_pos);
+                spatial.insert_edge(eb, intersection_pos, old_end_pos);
+
+                let connecting_edge = graph.add_edge(current_node, mid_node, seed.road_type);
+                spatial.insert_edge(
+                    connecting_edge,
+                    graph.node_pos(current_node),
+                    intersection_pos,
+                );
+                break;
+            }
+        }
+
+        // Branching: spawn an orthogonal trace at regular intervals
+        branch_accum += config.step_size;
+        let branch_dist = match seed.road_type {
+            RoadType::Major => config.minor_road_dist,
+            RoadType::Minor => config.major_road_dist,
+        };
+        if branch_accum >= branch_dist {
+            branch_accum = 0.0;
+            let (field_major, field_minor) = field.sample(proposed.x, proposed.y);
+            let branch_dir = match seed.road_type {
+                RoadType::Major => field_minor,
+                RoadType::Minor => field_major,
+            };
+            let branch_type = match seed.road_type {
+                RoadType::Major => RoadType::Minor,
+                RoadType::Minor => RoadType::Major,
+            };
+            active.push(Seed {
+                position: graph.node_pos(current_node),
+                direction: branch_dir,
+                road_type: branch_type,
+                branch_accum: 0.0,
+                existing_node: Some(current_node),
+            });
+        }
+    }
+}
