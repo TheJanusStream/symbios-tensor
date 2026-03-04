@@ -1,6 +1,73 @@
 use symbios_ground::HeightMap;
 
 use crate::graph::RoadGraph;
+use crate::lots::BuildingLot;
+
+
+pub fn carve_lots(lots: &[BuildingLot], heightmap: &mut HeightMap, blend_radius: f32) {
+    let scale = heightmap.scale();
+    let hw = heightmap.width();
+    let hh = heightmap.height();
+
+    for lot in lots {
+        // 1. Determine the target foundation height (e.g., sample the center)
+        let target_h = heightmap.get_height_at(lot.position.x, lot.position.y);
+        
+        let half_w = lot.width * 0.5;
+        let half_d = lot.depth * 0.5;
+        
+        // Calculate a generous Axis-Aligned Bounding Box (AABB) to limit our grid search
+        let max_radius = half_w.max(half_d) + blend_radius + scale * 2.0;
+        let min_x = (lot.position.x - max_radius).max(0.0);
+        let max_x = (lot.position.x + max_radius).min((hw - 1) as f32 * scale);
+        let min_z = (lot.position.y - max_radius).max(0.0);
+        let max_z = (lot.position.y + max_radius).min((hh - 1) as f32 * scale);
+
+        let gx_start = (min_x / scale).floor() as usize;
+        let gx_end = ((max_x / scale).ceil() as usize).min(hw - 1);
+        let gz_start = (min_z / scale).floor() as usize;
+        let gz_end = ((max_z / scale).ceil() as usize).min(hh - 1);
+
+        let cos = lot.rotation.cos();
+        let sin = lot.rotation.sin();
+
+        for gz in gz_start..=gz_end {
+            for gx in gx_start..=gx_end {
+                let world_x = gx as f32 * scale;
+                let world_z = gz as f32 * scale;
+
+                // 2. Transform world coordinates to Lot Local Space
+                let dx = world_x - lot.position.x;
+                let dz = world_z - lot.position.y;
+                
+                // Inverse rotation (2D)
+                let local_x = dx * cos + dz * sin;
+                let local_z = -dx * sin + dz * cos;
+
+                // 3. Calculate distance from the edge of the lot
+                let dist_x = local_x.abs() - half_w;
+                let dist_z = local_z.abs() - half_d;
+
+                // Distance to the rectangle. 
+                // If both are < 0, we are inside. 
+                // If > 0, we use length() to get rounded corners on the blend zone.
+                let dist_to_edge = dist_x.max(0.0).hypot(dist_z.max(0.0));
+
+                if dist_to_edge <= 0.0 {
+                    // Strictly inside the footprint: Flat foundation
+                    heightmap.set(gx, gz, target_h);
+                } else if dist_to_edge < blend_radius {
+                    // Inside the blend zone: Smooth interpolation (e.g., smoothstep)
+                    let t = dist_to_edge / blend_radius;
+                    // Simple linear blend (or use a smoothstep for softer embankments)
+                    let terrain_h = heightmap.get(gx, gz);
+                    let blended_h = target_h + t * (terrain_h - target_h);
+                    heightmap.set(gx, gz, blended_h);
+                }
+            }
+        }
+    }
+}
 
 /// Flattens the heightmap along road edges, creating smooth graded surfaces
 /// where roads are placed, with blended embankments at the edges.
