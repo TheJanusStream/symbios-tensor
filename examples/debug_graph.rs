@@ -1,6 +1,7 @@
 use symbios_ground::HeightMap;
 use symbios_tensor::{
-    block_centroid, carve_roads, extract_blocks, generate_roads, RoadType, TensorConfig,
+    LotConfig, block_centroid, carve_roads, extract_blocks, extract_lots, generate_roads, RoadType,
+    TensorConfig,
 };
 
 fn main() {
@@ -47,7 +48,18 @@ fn main() {
         );
     }
 
-    // 4. Carve roads into the terrain
+    // 4. Extract building lots
+    let lot_config = LotConfig::default();
+    let lots = extract_lots(&graph, &lot_config);
+    println!("\nBuilding lots: {}", lots.len());
+    for (i, lot) in lots.iter().enumerate() {
+        println!(
+            "  lot {i}: pos=({:.1}, {:.1}), rot={:.2}rad, {:.1}x{:.1}",
+            lot.position.x, lot.position.y, lot.rotation, lot.width, lot.depth
+        );
+    }
+
+    // 5. Carve roads into the terrain
     carve_roads(&graph, &mut hm, 2.0);
     println!("\nTerrain carved along {} active road edges.", active);
 }

@@ -1,5 +1,7 @@
 use symbios_ground::HeightMap;
-use symbios_tensor::{RoadType, TensorConfig, carve_roads, extract_blocks, generate_roads};
+use symbios_tensor::{
+    LotConfig, RoadType, TensorConfig, carve_roads, extract_blocks, extract_lots, generate_roads,
+};
 
 fn flat_heightmap() -> HeightMap {
     HeightMap::new(64, 64, 2.0)
@@ -130,4 +132,46 @@ fn graph_serialization_roundtrip() {
 
     assert_eq!(graph.nodes.len(), restored.nodes.len());
     assert_eq!(graph.edges.len(), restored.edges.len());
+}
+
+#[test]
+fn extract_lots_produces_buildings() {
+    use symbios_tensor::{CityBlock, RoadGraph, RoadType};
+
+    // Build a manual graph with a known enclosed rectangular block (30x20)
+    let mut graph = RoadGraph::default();
+    let n0 = graph.add_node(glam::Vec2::new(0.0, 0.0));
+    let n1 = graph.add_node(glam::Vec2::new(30.0, 0.0));
+    let n2 = graph.add_node(glam::Vec2::new(30.0, 20.0));
+    let n3 = graph.add_node(glam::Vec2::new(0.0, 20.0));
+    graph.add_edge(n0, n1, RoadType::Minor);
+    graph.add_edge(n1, n2, RoadType::Minor);
+    graph.add_edge(n2, n3, RoadType::Minor);
+    graph.add_edge(n3, n0, RoadType::Minor);
+    // CW winding (negative signed area) matches extract_blocks convention
+    graph.blocks.push(CityBlock {
+        perimeter: vec![n0, n1, n2, n3],
+    });
+
+    let lot_config = LotConfig::default();
+    let lots = extract_lots(&graph, &lot_config);
+
+    assert!(!lots.is_empty(), "should produce at least one building lot");
+
+    for lot in &lots {
+        assert!(lot.width > 0.0, "lot width must be positive");
+        assert!(lot.depth > 0.0, "lot depth must be positive");
+        assert!(
+            lot.width >= lot_config.min_width,
+            "lot width {} below minimum {}",
+            lot.width,
+            lot_config.min_width
+        );
+        assert!(
+            lot.depth >= lot_config.min_depth,
+            "lot depth {} below minimum {}",
+            lot.depth,
+            lot_config.min_depth
+        );
+    }
 }

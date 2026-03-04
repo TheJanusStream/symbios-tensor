@@ -146,7 +146,7 @@ fn pick_left_turn(
 }
 
 /// Signed area of the polygon via the shoelace formula (positive = CCW, negative = CW).
-fn signed_area(nodes: &[NodeId], graph: &RoadGraph) -> f32 {
+pub(crate) fn signed_area(nodes: &[NodeId], graph: &RoadGraph) -> f32 {
     let n = nodes.len();
     if n < 3 {
         return 0.0;
