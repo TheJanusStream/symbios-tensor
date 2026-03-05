@@ -337,8 +337,8 @@ fn apply_setbacks(
     depth: f32,
     config: &LotConfig,
 ) -> Option<BuildingLot> {
-    let new_width = width - 2.0 * config.side_setback;
-    let new_depth = depth - config.front_setback - config.rear_setback;
+    let new_width = width - 2.0 * config.side_setback.max(0.0);
+    let new_depth = depth - config.front_setback.max(0.0) - config.rear_setback.max(0.0);
 
     if new_width < config.min_width || new_depth < config.min_depth {
         return None;

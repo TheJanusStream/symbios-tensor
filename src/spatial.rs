@@ -153,7 +153,14 @@ pub fn resolve_trace_step(
             if !edge.active {
                 continue;
             }
-            if edge.start == current_node_id || edge.end == current_node_id {
+            // Skip edges connected to current node OR any of its neighbours,
+            // otherwise a trace curving back could snap to a neighbour's edge
+            // at the neighbour's position, creating a duplicate node.
+            if edge.start == current_node_id
+                || edge.end == current_node_id
+                || current_neighbours.contains(&edge.start)
+                || current_neighbours.contains(&edge.end)
+            {
                 continue;
             }
 

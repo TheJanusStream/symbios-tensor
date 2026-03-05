@@ -187,7 +187,7 @@ fn trace_streamline(
             RoadType::Major => k2_major,
             RoadType::Minor => k2_minor,
         };
-        let k2 = if k2.dot(dir) < 0.0 { -k2 } else { k2 };
+        let k2 = if k2.dot(k1) < 0.0 { -k2 } else { k2 };
 
         dir = k2;
         let proposed = current_pos + dir * config.step_size;
@@ -266,13 +266,15 @@ fn trace_streamline(
                 RoadType::Major => RoadType::Minor,
                 RoadType::Minor => RoadType::Major,
             };
-            active.push(Seed {
-                position: graph.node_pos(current_node),
-                direction: branch_dir,
-                road_type: branch_type,
-                branch_accum: 0.0,
-                existing_node: Some(current_node),
-            });
+            for &dir_sign in &[1.0_f32, -1.0] {
+                active.push(Seed {
+                    position: graph.node_pos(current_node),
+                    direction: branch_dir * dir_sign,
+                    road_type: branch_type,
+                    branch_accum: 0.0,
+                    existing_node: Some(current_node),
+                });
+            }
         }
     }
 }

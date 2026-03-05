@@ -134,13 +134,14 @@ fn pick_next_face_edge(
         let d = graph.nodes[to as usize].position - origin;
         let out_angle = d.y.atan2(d.x);
 
-        // Counter-clockwise delta from incoming_angle
-        let mut delta = out_angle - incoming_angle;
-        if delta <= 0.0 {
-            delta += std::f32::consts::TAU;
+        // Counter-clockwise delta from incoming_angle, in (0, TAU]
+        let mut delta = (out_angle - incoming_angle).rem_euclid(std::f32::consts::TAU);
+        // A delta near zero means a U-turn (same direction as incoming =
+        // reversing along the edge we came from). Push it to TAU so it is
+        // never chosen over a real turn.
+        if delta < 1e-5 {
+            delta = std::f32::consts::TAU;
         }
-        // Skip the exact reverse (delta ≈ π means going straight back)
-        // We want the smallest positive rotation that isn't a U-turn
         if delta < best_delta {
             best_delta = delta;
             best = Some(to);

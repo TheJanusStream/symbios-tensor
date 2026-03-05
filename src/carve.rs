@@ -8,6 +8,9 @@ pub fn carve_lots(lots: &[BuildingLot], heightmap: &mut HeightMap, blend_radius:
     let scale = heightmap.scale();
     let hw = heightmap.width();
     let hh = heightmap.height();
+    if hw == 0 || hh == 0 {
+        return;
+    }
 
     for lot in lots {
         // 1. Determine the target foundation height (e.g., sample the center)
@@ -75,6 +78,9 @@ pub fn carve_roads(graph: &RoadGraph, heightmap: &mut HeightMap, road_width: f32
     let scale = heightmap.scale();
     let hw = heightmap.width();
     let hh = heightmap.height();
+    if hw == 0 || hh == 0 {
+        return;
+    }
 
     for edge in &graph.edges {
         if !edge.active {
