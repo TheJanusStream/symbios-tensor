@@ -89,7 +89,7 @@ pub fn extract_blocks(graph: &mut RoadGraph) {
                 graph.nodes[prev as usize].position - graph.nodes[curr as usize].position;
             let incoming_angle = incoming_dir.y.atan2(incoming_dir.x);
 
-            let next = pick_next_face_edge(neighbours, graph, curr, incoming_angle);
+            let next = pick_next_face_edge(neighbours, graph, curr, prev, incoming_angle);
 
             match next {
                 Some(n) => {
@@ -120,10 +120,15 @@ pub fn extract_blocks(graph: &mut RoadGraph) {
 /// counter-clockwise rotation from `incoming_angle` (the reverse of our
 /// travel direction). This selects the sharpest right turn relative to
 /// our forward direction, tracing CW (interior) faces of the planar graph.
+///
+/// U-turns are detected topologically (`to == prev`) rather than via fragile
+/// angular tolerances, so near-parallel edges from imperfect snapping cannot
+/// trick the algorithm into reversing.
 fn pick_next_face_edge(
     neighbours: &[(NodeId, EdgeId)],
     graph: &RoadGraph,
     current: NodeId,
+    prev: NodeId,
     incoming_angle: f32,
 ) -> Option<NodeId> {
     let origin = graph.nodes[current as usize].position;
@@ -131,14 +136,16 @@ fn pick_next_face_edge(
     let mut best_delta = f32::MAX;
 
     for &(to, _) in neighbours {
+        // Topological U-turn check: skip the node we came from.
+        if to == prev {
+            continue;
+        }
+
         let d = graph.nodes[to as usize].position - origin;
         let out_angle = d.y.atan2(d.x);
 
         // Counter-clockwise delta from incoming_angle, in (0, TAU]
         let mut delta = (out_angle - incoming_angle).rem_euclid(std::f32::consts::TAU);
-        // A delta near zero means a U-turn (same direction as incoming =
-        // reversing along the edge we came from). Push it to TAU so it is
-        // never chosen over a real turn.
         if delta < 1e-5 {
             delta = std::f32::consts::TAU;
         }

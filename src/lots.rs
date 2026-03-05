@@ -67,7 +67,7 @@ pub fn extract_lots(graph: &RoadGraph, config: &LotConfig) -> Vec<BuildingLot> {
         let sub_polys = subdivide_polygon(&polygon, config.max_lot_area, config.min_lot_area, 10);
 
         for poly in sub_polys {
-            if let Some(lot) = polygon_to_lot(&poly, config) {
+            if let Some(lot) = polygon_to_lot(&poly, &polygon, config) {
                 lots.push(lot);
             }
         }
@@ -230,18 +230,63 @@ fn subdivide_polygon(
 // Frontage + inscribed box + setbacks
 // ---------------------------------------------------------------------------
 
-fn find_frontage(poly: &[Vec2]) -> (usize, f32) {
+/// Finds the frontage edge: the longest edge that lies on the original block
+/// perimeter (a street edge). Falls back to the longest edge overall if no
+/// boundary edge is found (e.g. heavily subdivided interiors).
+fn find_frontage(poly: &[Vec2], perimeter: &[Vec2]) -> (usize, f32) {
     let n = poly.len();
     let mut best_idx = 0;
     let mut best_len = 0.0_f32;
+    let mut best_boundary_idx = 0;
+    let mut best_boundary_len = 0.0_f32;
+
     for i in 0..n {
-        let len = (poly[(i + 1) % n] - poly[i]).length();
+        let a = poly[i];
+        let b = poly[(i + 1) % n];
+        let len = (b - a).length();
+
         if len > best_len {
             best_len = len;
             best_idx = i;
         }
+        if edge_on_perimeter(a, b, perimeter) && len > best_boundary_len {
+            best_boundary_len = len;
+            best_boundary_idx = i;
+        }
     }
-    (best_idx, best_len)
+
+    if best_boundary_len > 0.0 {
+        (best_boundary_idx, best_boundary_len)
+    } else {
+        (best_idx, best_len)
+    }
+}
+
+/// Returns true if both endpoints of edge (a, b) lie on some edge of `perimeter`.
+fn edge_on_perimeter(a: Vec2, b: Vec2, perimeter: &[Vec2]) -> bool {
+    let m = perimeter.len();
+    for j in 0..m {
+        let pa = perimeter[j];
+        let pb = perimeter[(j + 1) % m];
+        if point_on_segment(a, pa, pb) && point_on_segment(b, pa, pb) {
+            return true;
+        }
+    }
+    false
+}
+
+fn point_on_segment(p: Vec2, a: Vec2, b: Vec2) -> bool {
+    let ab = b - a;
+    let len_sq = ab.length_squared();
+    if len_sq < 1e-10 {
+        return p.distance(a) < 1e-3;
+    }
+    let t = (p - a).dot(ab) / len_sq;
+    if !(-1e-3..=1.0 + 1e-3).contains(&t) {
+        return false;
+    }
+    let proj = a + ab * t.clamp(0.0, 1.0);
+    p.distance(proj) < 1e-3
 }
 
 fn inscribed_box(poly: &[Vec2], frontage_idx: usize) -> Option<(Vec2, f32, f32, f32)> {
@@ -358,7 +403,7 @@ fn apply_setbacks(
     })
 }
 
-fn polygon_to_lot(poly: &[Vec2], config: &LotConfig) -> Option<BuildingLot> {
+fn polygon_to_lot(poly: &[Vec2], perimeter: &[Vec2], config: &LotConfig) -> Option<BuildingLot> {
     if poly.len() < 3 {
         return None;
     }
@@ -367,7 +412,7 @@ fn polygon_to_lot(poly: &[Vec2], config: &LotConfig) -> Option<BuildingLot> {
         return None;
     }
 
-    let (frontage_idx, _) = find_frontage(poly);
+    let (frontage_idx, _) = find_frontage(poly, perimeter);
     let (center, rotation, width, depth) = inscribed_box(poly, frontage_idx)?;
     apply_setbacks(center, rotation, width, depth, config)
 }
@@ -449,7 +494,7 @@ mod tests {
             Vec2::new(10.0, 5.0),
             Vec2::new(0.0, 5.0),
         ];
-        let (frontage_idx, _) = find_frontage(&rect);
+        let (frontage_idx, _) = find_frontage(&rect, &rect);
         let result = inscribed_box(&rect, frontage_idx);
         assert!(result.is_some());
         let (center, _rotation, width, depth) = result.unwrap();

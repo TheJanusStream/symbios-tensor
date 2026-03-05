@@ -132,7 +132,14 @@ pub fn generate_roads(heightmap: &HeightMap, config: &TensorConfig) -> RoadGraph
 
     // --- Trace each seed ---
     let bounds = Vec2::new(world_w, world_d);
+    // Cap total traces to prevent runaway branching in circular tensor flows.
+    let max_traces = active.len() * 50;
+    let mut trace_count = 0_usize;
     while let Some(seed) = active.pop() {
+        trace_count += 1;
+        if trace_count > max_traces {
+            break;
+        }
         trace_streamline(
             &field,
             &mut graph,
@@ -245,7 +252,10 @@ fn trace_streamline(
                     graph.node_pos(current_node),
                     intersection_pos,
                 );
-                break;
+                // Continue tracing through the intersection so that
+                // 4-way crossings form naturally instead of dead-ending
+                // at every T-junction.
+                current_node = mid_node;
             }
         }
 

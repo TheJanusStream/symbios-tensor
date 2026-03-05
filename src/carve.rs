@@ -74,6 +74,10 @@ pub fn carve_lots(lots: &[BuildingLot], heightmap: &mut HeightMap, blend_radius:
 
 /// Flattens the heightmap along road edges, creating smooth graded surfaces
 /// where roads are placed, with blended embankments at the edges.
+///
+/// Uses a two-pass approach: first all road surfaces are flattened, then
+/// embankments are blended. This prevents later embankments from overwriting
+/// previously flattened road pavement at intersections.
 pub fn carve_roads(graph: &RoadGraph, heightmap: &mut HeightMap, road_width: f32) {
     let scale = heightmap.scale();
     let hw = heightmap.width();
@@ -82,69 +86,125 @@ pub fn carve_roads(graph: &RoadGraph, heightmap: &mut HeightMap, road_width: f32
         return;
     }
 
+    let half_w = road_width * 0.5;
+
+    // Track cells that have been set to a road surface height so that
+    // the embankment pass does not overwrite them.
+    let mut is_road_surface = vec![false; hw * hh];
+
+    // Pass 1: flatten all road surfaces
     for edge in &graph.edges {
         if !edge.active {
             continue;
         }
+        let (start_pos, end_pos, start_h, end_h, _dir, _length) =
+            match edge_params(graph, edge, heightmap) {
+                Some(v) => v,
+                None => continue,
+            };
+        let ep = (start_pos, end_pos, start_h, end_h);
 
-        let start_pos = graph.nodes[edge.start as usize].position;
-        let end_pos = graph.nodes[edge.end as usize].position;
-
-        let start_h = heightmap.get_height_at(start_pos.x, start_pos.y);
-        let end_h = heightmap.get_height_at(end_pos.x, end_pos.y);
-
-        let dir = end_pos - start_pos;
-        let length = dir.length();
-        if length < 1e-6 {
-            continue;
-        }
-
-        // Compute the bounding box of this edge in grid coordinates, expanded by road_width
-        let half_w = road_width * 0.5;
-        let min_x = (start_pos.x.min(end_pos.x) - half_w - scale).max(0.0);
-        let max_x = (start_pos.x.max(end_pos.x) + half_w + scale).min((hw - 1) as f32 * scale);
-        let min_z = (start_pos.y.min(end_pos.y) - half_w - scale).max(0.0);
-        let max_z = (start_pos.y.max(end_pos.y) + half_w + scale).min((hh - 1) as f32 * scale);
-
-        let gx_start = (min_x / scale).floor() as usize;
-        let gx_end = ((max_x / scale).ceil() as usize).min(hw - 1);
-        let gz_start = (min_z / scale).floor() as usize;
-        let gz_end = ((max_z / scale).ceil() as usize).min(hh - 1);
+        let (gx_start, gx_end, gz_start, gz_end) =
+            edge_grid_bounds(start_pos, end_pos, half_w + scale, scale, hw, hh);
 
         for gz in gz_start..=gz_end {
             for gx in gx_start..=gx_end {
-                let world_x = gx as f32 * scale;
-                let world_z = gz as f32 * scale;
-
-                // Project this grid cell onto the road segment
-                let ap = glam::Vec2::new(world_x - start_pos.x, world_z - start_pos.y);
-                let t = (ap.dot(dir) / (length * length)).clamp(0.0, 1.0);
-                let proj = start_pos + t * dir;
-
-                let dist = glam::Vec2::new(world_x - proj.x, world_z - proj.y).length();
-
-                if dist > half_w + scale {
-                    continue;
-                }
-
-                // Interpolate the target road height along the segment
-                let road_h = start_h + t * (end_h - start_h);
-
+                let (dist, road_h) = project_cell(gx, gz, scale, &ep);
                 if dist <= half_w {
-                    // Under the road surface: force to road height
                     heightmap.set(gx, gz, road_h);
-                } else {
-                    // Embankment blend zone: smoothly transition between road and terrain.
-                    // Only update if the blended value is closer to road_h than the
-                    // current height, so earlier roads' flat surfaces aren't disrupted.
-                    let blend = (dist - half_w) / scale;
-                    let current_h = heightmap.get(gx, gz);
-                    let blended = road_h + blend * (current_h - road_h);
-                    if (blended - road_h).abs() < (current_h - road_h).abs() {
-                        heightmap.set(gx, gz, blended);
-                    }
+                    is_road_surface[gz * hw + gx] = true;
                 }
             }
         }
     }
+
+    // Pass 2: embankments — skip cells already marked as road surface
+    for edge in &graph.edges {
+        if !edge.active {
+            continue;
+        }
+        let (start_pos, end_pos, start_h, end_h, _dir, _length) =
+            match edge_params(graph, edge, heightmap) {
+                Some(v) => v,
+                None => continue,
+            };
+        let ep = (start_pos, end_pos, start_h, end_h);
+
+        let (gx_start, gx_end, gz_start, gz_end) =
+            edge_grid_bounds(start_pos, end_pos, half_w + scale, scale, hw, hh);
+
+        for gz in gz_start..=gz_end {
+            for gx in gx_start..=gx_end {
+                if is_road_surface[gz * hw + gx] {
+                    continue;
+                }
+                let (dist, road_h) = project_cell(gx, gz, scale, &ep);
+                if dist > half_w && dist <= half_w + scale {
+                    let blend = (dist - half_w) / scale;
+                    let current_h = heightmap.get(gx, gz);
+                    let blended = road_h + blend * (current_h - road_h);
+                    heightmap.set(gx, gz, blended);
+                }
+            }
+        }
+    }
+}
+
+use crate::graph::RoadEdge;
+
+fn edge_params(
+    graph: &RoadGraph,
+    edge: &RoadEdge,
+    heightmap: &HeightMap,
+) -> Option<(glam::Vec2, glam::Vec2, f32, f32, glam::Vec2, f32)> {
+    let start_pos = graph.nodes[edge.start as usize].position;
+    let end_pos = graph.nodes[edge.end as usize].position;
+    let dir = end_pos - start_pos;
+    let length = dir.length();
+    if length < 1e-6 {
+        return None;
+    }
+    let start_h = heightmap.get_height_at(start_pos.x, start_pos.y);
+    let end_h = heightmap.get_height_at(end_pos.x, end_pos.y);
+    Some((start_pos, end_pos, start_h, end_h, dir, length))
+}
+
+fn edge_grid_bounds(
+    start_pos: glam::Vec2,
+    end_pos: glam::Vec2,
+    expand: f32,
+    scale: f32,
+    hw: usize,
+    hh: usize,
+) -> (usize, usize, usize, usize) {
+    let min_x = (start_pos.x.min(end_pos.x) - expand).max(0.0);
+    let max_x = (start_pos.x.max(end_pos.x) + expand).min((hw - 1) as f32 * scale);
+    let min_z = (start_pos.y.min(end_pos.y) - expand).max(0.0);
+    let max_z = (start_pos.y.max(end_pos.y) + expand).min((hh - 1) as f32 * scale);
+    (
+        (min_x / scale).floor() as usize,
+        ((max_x / scale).ceil() as usize).min(hw - 1),
+        (min_z / scale).floor() as usize,
+        ((max_z / scale).ceil() as usize).min(hh - 1),
+    )
+}
+
+/// Projects grid cell `(gx, gz)` onto a road edge and returns `(dist, road_h)`.
+fn project_cell(
+    gx: usize,
+    gz: usize,
+    scale: f32,
+    edge: &(glam::Vec2, glam::Vec2, f32, f32),
+) -> (f32, f32) {
+    let (start_pos, _, start_h, end_h) = *edge;
+    let dir = edge.1 - start_pos;
+    let length = dir.length();
+    let world_x = gx as f32 * scale;
+    let world_z = gz as f32 * scale;
+    let ap = glam::Vec2::new(world_x - start_pos.x, world_z - start_pos.y);
+    let t = (ap.dot(dir) / (length * length)).clamp(0.0, 1.0);
+    let proj = start_pos + t * dir;
+    let dist = glam::Vec2::new(world_x - proj.x, world_z - proj.y).length();
+    let road_h = start_h + t * (end_h - start_h);
+    (dist, road_h)
 }

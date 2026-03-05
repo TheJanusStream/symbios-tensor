@@ -153,21 +153,16 @@ pub fn resolve_trace_step(
             if !edge.active {
                 continue;
             }
-            // Skip edges connected to current node OR any of its neighbours,
-            // otherwise a trace curving back could snap to a neighbour's edge
-            // at the neighbour's position, creating a duplicate node.
-            if edge.start == current_node_id
-                || edge.end == current_node_id
-                || current_neighbours.contains(&edge.start)
-                || current_neighbours.contains(&edge.end)
-            {
+            // Always skip edges directly connected to the current node
+            if edge.start == current_node_id || edge.end == current_node_id {
                 continue;
             }
 
             let e_start = graph.nodes[edge.start as usize].position;
             let e_end = graph.nodes[edge.end as usize].position;
 
-            // 2a. Physical crossing
+            // 2a. Physical crossing — always check, even for neighbour edges,
+            // so that traces cannot plow through cross-streets undetected.
             if let Some(intersect) = segment_intersection(start_pos, proposed_pos, e_start, e_end) {
                 let dist = start_pos.distance_squared(intersect);
                 if dist < closest_edge_dist {
@@ -177,7 +172,13 @@ pub fn resolve_trace_step(
                 continue;
             }
 
-            // 2b. T-junction proximity
+            // 2b. T-junction proximity — skip neighbour edges here only,
+            // to prevent snap-back on early steps when snap_radius > step_size.
+            if current_neighbours.contains(&edge.start)
+                || current_neighbours.contains(&edge.end)
+            {
+                continue;
+            }
             let proj = closest_point_on_segment(proposed_pos, e_start, e_end);
             let dist_to_edge_sq = proposed_pos.distance_squared(proj);
 
@@ -192,10 +193,33 @@ pub fn resolve_trace_step(
     }
 
     if let Some((edge_id, intersection_pos)) = closest_edge_hit {
-        return TraceResult::SnappedToEdge {
-            edge_id,
-            intersection_pos,
-        };
+        let edge = &graph.edges[edge_id as usize];
+        let e_start = graph.nodes[edge.start as usize].position;
+        let e_end = graph.nodes[edge.end as usize].position;
+
+        // Edge guard: if the intersection lands near an existing endpoint,
+        // snap to that node instead of splitting (avoids zero-length edges
+        // and duplicate nodes from split_edge at t ≈ 0 or t ≈ 1).
+        let dist_to_start = intersection_pos.distance_squared(e_start);
+        let dist_to_end = intersection_pos.distance_squared(e_end);
+
+        if dist_to_start < snap_sq && dist_to_start <= dist_to_end {
+            let nid = edge.start;
+            if nid != current_node_id && !current_neighbours.contains(&nid) {
+                return TraceResult::SnappedToNode(nid);
+            }
+            // Near a neighbour endpoint — fall through to Clear
+        } else if dist_to_end < snap_sq {
+            let nid = edge.end;
+            if nid != current_node_id && !current_neighbours.contains(&nid) {
+                return TraceResult::SnappedToNode(nid);
+            }
+        } else {
+            return TraceResult::SnappedToEdge {
+                edge_id,
+                intersection_pos,
+            };
+        }
     }
 
     TraceResult::Clear(proposed_pos)
