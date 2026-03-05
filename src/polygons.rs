@@ -3,10 +3,13 @@ use glam::Vec2;
 use crate::graph::{CityBlock, EdgeId, NodeId, RoadGraph};
 
 /// Extracts enclosed city blocks from the planar road graph using the
-/// "left-most turn" (minimum angle) walk algorithm.
+/// minimum-angle walk algorithm.
 ///
-/// Each block is a minimal cycle — the smallest closed polygon formed by
-/// road edges. These become the building footprint candidates for shape grammars.
+/// The walk picks the smallest counter-clockwise turn from the reverse
+/// incoming direction at each node, which traces faces in **clockwise**
+/// (CW) winding order. CW polygons have negative signed area, identifying
+/// them as bounded interior blocks. The unbounded exterior face winds CCW
+/// and is filtered out by the area sign check.
 pub fn extract_blocks(graph: &mut RoadGraph) {
     let mut visited_half_edges: std::collections::HashSet<(NodeId, NodeId)> =
         std::collections::HashSet::new();
@@ -73,7 +76,9 @@ pub fn extract_blocks(graph: &mut RoadGraph) {
                 break;
             }
 
-            // Find next: the edge that makes the sharpest left turn from (prev → curr)
+            // Find next: the edge with the smallest CCW rotation from the reverse
+            // incoming direction. Because incoming_dir points backwards, this
+            // selects the sharpest right turn — tracing CW (interior) faces.
             let neighbours = &adjacency[curr as usize];
             if neighbours.is_empty() {
                 valid = false;
@@ -84,9 +89,7 @@ pub fn extract_blocks(graph: &mut RoadGraph) {
                 graph.nodes[prev as usize].position - graph.nodes[curr as usize].position;
             let incoming_angle = incoming_dir.y.atan2(incoming_dir.x);
 
-            // Find the neighbour whose outgoing angle is the smallest counter-clockwise
-            // rotation from the incoming angle. This is the "left-most turn".
-            let next = pick_left_turn(neighbours, graph, curr, incoming_angle);
+            let next = pick_next_face_edge(neighbours, graph, curr, incoming_angle);
 
             match next {
                 Some(n) => {
@@ -113,9 +116,11 @@ pub fn extract_blocks(graph: &mut RoadGraph) {
     }
 }
 
-/// Picks the neighbour that represents the smallest counter-clockwise turn
-/// from `incoming_angle` (the direction we arrived from).
-fn pick_left_turn(
+/// Picks the neighbour whose outgoing angle is the smallest positive
+/// counter-clockwise rotation from `incoming_angle` (the reverse of our
+/// travel direction). This selects the sharpest right turn relative to
+/// our forward direction, tracing CW (interior) faces of the planar graph.
+fn pick_next_face_edge(
     neighbours: &[(NodeId, EdgeId)],
     graph: &RoadGraph,
     current: NodeId,
@@ -160,15 +165,40 @@ pub(crate) fn signed_area(nodes: &[NodeId], graph: &RoadGraph) -> f32 {
     area * 0.5
 }
 
-/// Returns the centroid of a [`CityBlock`] polygon.
+/// Returns the centroid of a [`CityBlock`] polygon using the shoelace-based
+/// geometric centroid formula (robust for irregular polygons).
 pub fn block_centroid(block: &CityBlock, graph: &RoadGraph) -> Vec2 {
-    if block.perimeter.is_empty() {
+    let n = block.perimeter.len();
+    if n == 0 {
         return Vec2::ZERO;
     }
-    let sum: Vec2 = block
-        .perimeter
-        .iter()
-        .map(|&nid| graph.nodes[nid as usize].position)
-        .sum();
-    sum / block.perimeter.len() as f32
+    if n < 3 {
+        let sum: Vec2 = block
+            .perimeter
+            .iter()
+            .map(|&nid| graph.nodes[nid as usize].position)
+            .sum();
+        return sum / n as f32;
+    }
+    let mut cx = 0.0_f32;
+    let mut cy = 0.0_f32;
+    let mut signed_area_2 = 0.0_f32;
+    for i in 0..n {
+        let a = graph.nodes[block.perimeter[i] as usize].position;
+        let b = graph.nodes[block.perimeter[(i + 1) % n] as usize].position;
+        let cross = a.x * b.y - b.x * a.y;
+        cx += (a.x + b.x) * cross;
+        cy += (a.y + b.y) * cross;
+        signed_area_2 += cross;
+    }
+    if signed_area_2.abs() < 1e-8 {
+        let sum: Vec2 = block
+            .perimeter
+            .iter()
+            .map(|&nid| graph.nodes[nid as usize].position)
+            .sum();
+        return sum / n as f32;
+    }
+    let inv = 1.0 / (3.0 * signed_area_2);
+    Vec2::new(cx * inv, cy * inv)
 }

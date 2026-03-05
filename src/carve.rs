@@ -17,7 +17,7 @@ pub fn carve_lots(lots: &[BuildingLot], heightmap: &mut HeightMap, blend_radius:
         let half_d = lot.depth * 0.5;
         
         // Calculate a generous Axis-Aligned Bounding Box (AABB) to limit our grid search
-        let max_radius = half_w.max(half_d) + blend_radius + scale * 2.0;
+        let max_radius = half_w.hypot(half_d) + blend_radius + scale * 2.0;
         let min_x = (lot.position.x - max_radius).max(0.0);
         let max_x = (lot.position.x + max_radius).min((hw - 1) as f32 * scale);
         let min_z = (lot.position.y - max_radius).max(0.0);
@@ -128,11 +128,15 @@ pub fn carve_roads(graph: &RoadGraph, heightmap: &mut HeightMap, road_width: f32
                     // Under the road surface: force to road height
                     heightmap.set(gx, gz, road_h);
                 } else {
-                    // Embankment blend zone: smoothly transition between road and terrain
+                    // Embankment blend zone: smoothly transition between road and terrain.
+                    // Only update if the blended value is closer to road_h than the
+                    // current height, so earlier roads' flat surfaces aren't disrupted.
                     let blend = (dist - half_w) / scale;
-                    let terrain_h = heightmap.get(gx, gz);
-                    let blended = road_h + blend * (terrain_h - road_h);
-                    heightmap.set(gx, gz, blended);
+                    let current_h = heightmap.get(gx, gz);
+                    let blended = road_h + blend * (current_h - road_h);
+                    if (blended - road_h).abs() < (current_h - road_h).abs() {
+                        heightmap.set(gx, gz, blended);
+                    }
                 }
             }
         }

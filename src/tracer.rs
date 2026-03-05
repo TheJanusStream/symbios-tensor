@@ -50,7 +50,33 @@ struct Seed {
 
 /// Generates a [`RoadGraph`] by tracing streamlines through the tensor field
 /// derived from the given heightmap.
+///
+/// # Panics
+///
+/// Panics if any `TensorConfig` parameter is non-positive (step_size,
+/// major_road_dist, minor_road_dist, snap_radius must all be > 0).
 pub fn generate_roads(heightmap: &HeightMap, config: &TensorConfig) -> RoadGraph {
+    assert!(
+        config.step_size > 0.0,
+        "step_size must be positive, got {}",
+        config.step_size
+    );
+    assert!(
+        config.major_road_dist > 0.0,
+        "major_road_dist must be positive, got {}",
+        config.major_road_dist
+    );
+    assert!(
+        config.minor_road_dist > 0.0,
+        "minor_road_dist must be positive, got {}",
+        config.minor_road_dist
+    );
+    assert!(
+        config.snap_radius > 0.0,
+        "snap_radius must be positive, got {}",
+        config.snap_radius
+    );
+
     let field = TensorField::new(heightmap);
     let mut graph = RoadGraph::default();
 
@@ -146,22 +172,24 @@ fn trace_streamline(
     for _ in 0..config.max_trace_steps {
         let current_pos = graph.node_pos(current_node);
 
-        // RK2 (midpoint method) integration through the tensor field
-        let mid = current_pos + dir * (config.step_size * 0.5);
-        let (field_major, field_minor) = field.sample(mid.x, mid.y);
-        let field_dir = match seed.road_type {
-            RoadType::Major => field_major,
-            RoadType::Minor => field_minor,
+        // RK2 (midpoint method): sample k1 at current position
+        let (k1_major, k1_minor) = field.sample(current_pos.x, current_pos.y);
+        let k1 = match seed.road_type {
+            RoadType::Major => k1_major,
+            RoadType::Minor => k1_minor,
         };
+        let k1 = if k1.dot(dir) < 0.0 { -k1 } else { k1 };
 
-        // Ensure consistent direction (avoid 180° flips between steps)
-        let field_dir = if field_dir.dot(dir) < 0.0 {
-            -field_dir
-        } else {
-            field_dir
+        // Sample k2 at midpoint
+        let mid = current_pos + k1 * (config.step_size * 0.5);
+        let (k2_major, k2_minor) = field.sample(mid.x, mid.y);
+        let k2 = match seed.road_type {
+            RoadType::Major => k2_major,
+            RoadType::Minor => k2_minor,
         };
+        let k2 = if k2.dot(dir) < 0.0 { -k2 } else { k2 };
 
-        dir = field_dir;
+        dir = k2;
         let proposed = current_pos + dir * config.step_size;
 
         // Bounds check

@@ -298,6 +298,32 @@ fn inscribed_box(poly: &[Vec2], frontage_idx: usize) -> Option<(Vec2, f32, f32, 
         return None;
     }
 
+    // Verify side edges: cast rays along ±street_dir from the back corners
+    // to clamp width so the rectangle stays inside the polygon.
+    let back_center = (fa + fb) * 0.5 + inward_dir * min_depth;
+    let mut half_width_limit = width * 0.5;
+
+    for &sign in &[1.0_f32, -1.0] {
+        let ray_origin = back_center;
+        let ray_end = ray_origin + street_dir * sign * 10_000.0;
+        let mut closest = f32::MAX;
+        for j in 0..n {
+            let ea = poly[j];
+            let eb = poly[(j + 1) % n];
+            if let Some(hit) = segment_intersection(ray_origin, ray_end, ea, eb) {
+                let d = (hit - ray_origin).dot(street_dir * sign);
+                if d > 1e-4 && d < closest {
+                    closest = d;
+                }
+            }
+        }
+        if closest < half_width_limit {
+            half_width_limit = closest;
+        }
+    }
+
+    let width = half_width_limit * 2.0;
+
     let street_midpoint = (fa + fb) * 0.5;
     let center = street_midpoint + inward_dir * (min_depth * 0.5);
 
