@@ -1,3 +1,5 @@
+//! Low-level 2D geometry primitives used by the tracer and spatial hash.
+
 use glam::Vec2;
 
 /// Returns the closest point on segment `a`–`b` to point `p`.

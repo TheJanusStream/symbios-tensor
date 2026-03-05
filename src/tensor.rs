@@ -1,3 +1,10 @@
+//! Tensor field derived from heightmap surface normals.
+//!
+//! The field decomposes each surface normal into orthogonal 2D directions:
+//! a **major** (contour) axis that follows elevation lines and a **minor**
+//! (gradient) axis that points up- or down-slope. Road traces integrate
+//! along these axes to produce terrain-adaptive street layouts.
+
 use glam::{Vec2, Vec3};
 use symbios_ground::HeightMap;
 
@@ -11,6 +18,7 @@ pub struct TensorField<'a> {
 }
 
 impl<'a> TensorField<'a> {
+    /// Creates a tensor field backed by the given heightmap.
     pub fn new(heightmap: &'a HeightMap) -> Self {
         Self { heightmap }
     }

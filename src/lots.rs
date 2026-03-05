@@ -1,3 +1,11 @@
+//! Building lot extraction from city blocks.
+//!
+//! Each [`CityBlock`](crate::graph::CityBlock) polygon is recursively split
+//! along its longest edge until sub-polygons fall below a configurable area
+//! threshold. A street-aligned inscribed rectangle is then computed for each
+//! piece, with front/side/rear setbacks applied to produce the final
+//! [`BuildingLot`] footprint.
+
 use glam::Vec2;
 use serde::{Deserialize, Serialize};
 
@@ -218,8 +226,18 @@ fn subdivide_polygon(
     match split_polygon_by_line(poly, centroid, perp) {
         Some((left, right)) => {
             let mut result = Vec::new();
-            result.extend(subdivide_polygon(&left, max_area, min_area, depth_limit - 1));
-            result.extend(subdivide_polygon(&right, max_area, min_area, depth_limit - 1));
+            result.extend(subdivide_polygon(
+                &left,
+                max_area,
+                min_area,
+                depth_limit - 1,
+            ));
+            result.extend(subdivide_polygon(
+                &right,
+                max_area,
+                min_area,
+                depth_limit - 1,
+            ));
             result
         }
         None => vec![poly.to_vec()],
@@ -471,15 +489,25 @@ mod tests {
         let (a, b) = result.unwrap();
         let area_a = polygon_area(&a);
         let area_b = polygon_area(&b);
-        assert!((area_a - 100.0).abs() < 1.0, "half A should be ~100 sqm, got {area_a}");
-        assert!((area_b - 100.0).abs() < 1.0, "half B should be ~100 sqm, got {area_b}");
+        assert!(
+            (area_a - 100.0).abs() < 1.0,
+            "half A should be ~100 sqm, got {area_a}"
+        );
+        assert!(
+            (area_b - 100.0).abs() < 1.0,
+            "half B should be ~100 sqm, got {area_b}"
+        );
     }
 
     #[test]
     fn subdivide_large_block() {
         let big = square(0.0, 0.0, 40.0); // 1600 sqm
         let sub = subdivide_polygon(&big, 400.0, 50.0, 10);
-        assert!(sub.len() >= 4, "1600 sqm block should yield at least 4 lots, got {}", sub.len());
+        assert!(
+            sub.len() >= 4,
+            "1600 sqm block should yield at least 4 lots, got {}",
+            sub.len()
+        );
         for poly in &sub {
             let area = polygon_area(poly);
             assert!(area <= 400.0 + 1.0, "sub-polygon area {area} exceeds max");
@@ -498,7 +526,10 @@ mod tests {
         let result = inscribed_box(&rect, frontage_idx);
         assert!(result.is_some());
         let (center, _rotation, width, depth) = result.unwrap();
-        assert!((width - 10.0).abs() < 0.5, "width should be ~10, got {width}");
+        assert!(
+            (width - 10.0).abs() < 0.5,
+            "width should be ~10, got {width}"
+        );
         assert!((depth - 5.0).abs() < 0.5, "depth should be ~5, got {depth}");
         assert!((center.x - 5.0).abs() < 0.5);
         assert!((center.y - 2.5).abs() < 0.5);

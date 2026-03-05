@@ -1,3 +1,11 @@
+//! Streamline tracer — the core road generation algorithm.
+//!
+//! Seeds are placed on a jittered grid and traced bidirectionally (±major,
+//! ±minor) through the tensor field using RK2 (midpoint) integration.
+//! Traces snap to existing nodes and edges via the spatial hash, creating
+//! T-junctions and 4-way intersections. Orthogonal branches are spawned at
+//! configurable intervals to fill the network.
+
 use glam::Vec2;
 use rand::Rng;
 use rand_pcg::Pcg64;

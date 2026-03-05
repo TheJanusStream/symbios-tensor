@@ -1,3 +1,11 @@
+//! Spatial hash grid for fast proximity and intersection queries during tracing.
+//!
+//! [`SpatialHash`] partitions world space into a uniform grid of cells, each
+//! storing references to nearby nodes and edges. [`resolve_trace_step`]
+//! evaluates a proposed trace step against the graph, detecting node snaps,
+//! edge crossings, and T-junction proximity — all in O(1) expected time per
+//! query.
+
 use glam::Vec2;
 
 use crate::geometry::{closest_point_on_segment, segment_intersection};
@@ -18,6 +26,8 @@ pub struct SpatialHash {
 }
 
 impl SpatialHash {
+    /// Creates a new spatial hash covering a `world_width` × `world_depth`
+    /// area with cells of the given size.
     pub fn new(world_width: f32, world_depth: f32, cell_size: f32) -> Self {
         let cols = (world_width / cell_size).ceil() as usize;
         let rows = (world_depth / cell_size).ceil() as usize;
@@ -40,12 +50,14 @@ impl SpatialHash {
         }
     }
 
+    /// Registers a node in the cell containing `pos`.
     pub fn insert_node(&mut self, id: NodeId, pos: Vec2) {
         if let Some(idx) = self.coords_to_index(pos) {
             self.cells[idx].nodes.push(id);
         }
     }
 
+    /// Registers an edge in every cell its axis-aligned bounding box overlaps.
     pub fn insert_edge(&mut self, id: EdgeId, start: Vec2, end: Vec2) {
         let min_col = ((start.x.min(end.x) / self.cell_size).floor() as isize).max(0);
         let max_col =
@@ -174,9 +186,7 @@ pub fn resolve_trace_step(
 
             // 2b. T-junction proximity — skip neighbour edges here only,
             // to prevent snap-back on early steps when snap_radius > step_size.
-            if current_neighbours.contains(&edge.start)
-                || current_neighbours.contains(&edge.end)
-            {
+            if current_neighbours.contains(&edge.start) || current_neighbours.contains(&edge.end) {
                 continue;
             }
             let proj = closest_point_on_segment(proposed_pos, e_start, e_end);

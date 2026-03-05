@@ -1,3 +1,9 @@
+//! City block extraction from the planar road graph.
+//!
+//! Uses a minimum-angle (left-most turn) walk to enumerate every bounded
+//! interior face of the planar graph as a [`CityBlock`] polygon. The
+//! unbounded exterior face is filtered out by its winding direction.
+
 use glam::Vec2;
 
 use crate::graph::{CityBlock, EdgeId, NodeId, RoadGraph};

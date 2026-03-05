@@ -1,7 +1,7 @@
 use symbios_ground::HeightMap;
 use symbios_tensor::{
-    LotConfig, block_centroid, carve_roads, extract_blocks, extract_lots, generate_roads, RoadType,
-    TensorConfig,
+    LotConfig, RoadType, TensorConfig, block_centroid, carve_roads, extract_blocks, extract_lots,
+    generate_roads,
 };
 
 fn main() {
@@ -31,7 +31,10 @@ fn main() {
 
     println!("Road Graph:");
     println!("  nodes: {}", graph.nodes.len());
-    println!("  edges: {} active ({} major, {} minor)", active, major, minor);
+    println!(
+        "  edges: {} active ({} major, {} minor)",
+        active, major, minor
+    );
 
     // 3. Extract city blocks
     extract_blocks(&mut graph);

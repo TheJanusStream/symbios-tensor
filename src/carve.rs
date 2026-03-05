@@ -1,9 +1,19 @@
+//! Heightmap carving for roads and building lots.
+//!
+//! After the road network and lots are generated, these functions modify the
+//! underlying [`symbios_ground::HeightMap`] to create flat surfaces where
+//! roads and buildings sit, with smooth embankment blending at the edges.
+
 use symbios_ground::HeightMap;
 
 use crate::graph::RoadGraph;
 use crate::lots::BuildingLot;
 
-
+/// Flattens the heightmap under each building lot with blended embankments.
+///
+/// Each lot's footprint is set to a uniform foundation height (sampled at the
+/// lot center). Grid cells within `blend_radius` of the footprint edge are
+/// linearly interpolated between the foundation and natural terrain height.
 pub fn carve_lots(lots: &[BuildingLot], heightmap: &mut HeightMap, blend_radius: f32) {
     let scale = heightmap.scale();
     let hw = heightmap.width();
@@ -15,10 +25,10 @@ pub fn carve_lots(lots: &[BuildingLot], heightmap: &mut HeightMap, blend_radius:
     for lot in lots {
         // 1. Determine the target foundation height (e.g., sample the center)
         let target_h = heightmap.get_height_at(lot.position.x, lot.position.y);
-        
+
         let half_w = lot.width * 0.5;
         let half_d = lot.depth * 0.5;
-        
+
         // Calculate a generous Axis-Aligned Bounding Box (AABB) to limit our grid search
         let max_radius = half_w.hypot(half_d) + blend_radius + scale * 2.0;
         let min_x = (lot.position.x - max_radius).max(0.0);
@@ -42,7 +52,7 @@ pub fn carve_lots(lots: &[BuildingLot], heightmap: &mut HeightMap, blend_radius:
                 // 2. Transform world coordinates to Lot Local Space
                 let dx = world_x - lot.position.x;
                 let dz = world_z - lot.position.y;
-                
+
                 // Inverse rotation (2D)
                 let local_x = dx * cos + dz * sin;
                 let local_z = -dx * sin + dz * cos;
@@ -51,8 +61,8 @@ pub fn carve_lots(lots: &[BuildingLot], heightmap: &mut HeightMap, blend_radius:
                 let dist_x = local_x.abs() - half_w;
                 let dist_z = local_z.abs() - half_d;
 
-                // Distance to the rectangle. 
-                // If both are < 0, we are inside. 
+                // Distance to the rectangle.
+                // If both are < 0, we are inside.
                 // If > 0, we use length() to get rounded corners on the blend zone.
                 let dist_to_edge = dist_x.max(0.0).hypot(dist_z.max(0.0));
 
