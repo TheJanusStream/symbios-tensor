@@ -113,9 +113,13 @@ pub fn extract_blocks(graph: &mut RoadGraph) {
             // Remove the duplicate closing node (last == first)
             cycle.pop();
 
+            // Remove dead-end antenna spikes (out-and-back U-turns) so the
+            // perimeter is a simple polygon for lot subdivision.
+            strip_antennas(&mut cycle);
+
             // Reject the outer (unbounded) face: if the polygon winds clockwise
             // (negative signed area) it is an interior block.
-            if signed_area(&cycle, graph) < 0.0 {
+            if cycle.len() >= 3 && signed_area(&cycle, graph) < 0.0 {
                 graph.blocks.push(CityBlock { perimeter: cycle });
             }
         }
@@ -182,6 +186,33 @@ pub(crate) fn signed_area(nodes: &[NodeId], graph: &RoadGraph) -> f32 {
         area += a.x * b.y - b.x * a.y;
     }
     area * 0.5
+}
+
+/// Removes antenna spikes (out-and-back dead-end sequences) from a cycle.
+///
+/// An antenna appears as `...A → B → ... → B → A...` where the walker
+/// traveled down a dead-end and U-turned back. This collapses each such
+/// spike so the perimeter is a simple polygon.
+fn strip_antennas(cycle: &mut Vec<NodeId>) {
+    // Repeatedly scan for the first duplicate node and remove the spike
+    // between its two occurrences. This is O(n²) in the worst case but
+    // perimeters are typically small (<50 nodes).
+    loop {
+        let mut found = false;
+        'outer: for i in 0..cycle.len() {
+            for j in (i + 1)..cycle.len() {
+                if cycle[i] == cycle[j] {
+                    // Remove the spike: keep cycle[i], drop i+1..=j
+                    cycle.drain((i + 1)..=j);
+                    found = true;
+                    break 'outer;
+                }
+            }
+        }
+        if !found {
+            break;
+        }
+    }
 }
 
 /// Returns the centroid of a [`CityBlock`] polygon using the shoelace-based

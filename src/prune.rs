@@ -124,11 +124,18 @@ pub fn prune_unused_roads(graph: &mut RoadGraph, lots: &[BuildingLot]) {
         unreached_essential.remove(&start_node);
     }
 
+    // Pre-allocate Dijkstra buffers and reuse across iterations to avoid
+    // repeated allocation/deallocation of large vectors.
+    let num_nodes = graph.nodes.len();
+    let mut heap = BinaryHeap::new();
+    let mut distances = vec![f32::MAX; num_nodes];
+    let mut came_from: Vec<Option<(NodeId, EdgeId)>> = vec![None; num_nodes];
+
     // Loop until EVERY house is connected
     while !unreached_essential.is_empty() {
-        let mut heap = BinaryHeap::new();
-        let mut distances = vec![f32::MAX; graph.nodes.len()];
-        let mut came_from: Vec<Option<(NodeId, EdgeId)>> = vec![None; graph.nodes.len()];
+        heap.clear();
+        distances.fill(f32::MAX);
+        came_from.fill(None);
 
         for &node in &connected_nodes {
             distances[node as usize] = 0.0;
@@ -212,15 +219,13 @@ pub fn prune_unused_roads(graph: &mut RoadGraph, lots: &[BuildingLot]) {
             let island_comp = comp_ids[island_seed[0] as usize];
             let mut island_connected: HashSet<NodeId> = HashSet::new();
             island_connected.insert(island_seed[0]);
-            let mut island_remaining: HashSet<NodeId> =
-                island_seed.iter().copied().collect();
+            let mut island_remaining: HashSet<NodeId> = island_seed.iter().copied().collect();
             island_remaining.remove(&island_seed[0]);
 
             while !island_remaining.is_empty() {
-                let mut heap = BinaryHeap::new();
-                let mut distances = vec![f32::MAX; graph.nodes.len()];
-                let mut came_from: Vec<Option<(NodeId, EdgeId)>> =
-                    vec![None; graph.nodes.len()];
+                heap.clear();
+                distances.fill(f32::MAX);
+                came_from.fill(None);
 
                 for &node in &island_connected {
                     distances[node as usize] = 0.0;

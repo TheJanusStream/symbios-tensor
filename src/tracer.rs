@@ -264,9 +264,8 @@ fn trace_streamline(
                 intersection_pos,
             } => {
                 let split_edge = &graph.edges[edge_id as usize];
-                let edge_dir = (graph.node_pos(split_edge.end)
-                    - graph.node_pos(split_edge.start))
-                .normalize_or_zero();
+                let edge_dir = (graph.node_pos(split_edge.end) - graph.node_pos(split_edge.start))
+                    .normalize_or_zero();
 
                 let (mid_node, ea, eb) = graph.split_edge(edge_id, intersection_pos);
                 spatial.insert_node(mid_node, intersection_pos);

@@ -128,7 +128,12 @@ pub fn carve_roads(graph: &RoadGraph, heightmap: &mut HeightMap, road_width: f32
         }
     }
 
-    // Pass 2: embankments — skip cells already marked as road surface
+    // Pass 2: embankments — for each cell, only the closest road's
+    // embankment applies, preventing overwrite artifacts at intersections.
+    // First, find the minimum distance and corresponding road height per cell.
+    let mut embankment_dist = vec![f32::MAX; hw * hh];
+    let mut embankment_road_h = vec![0.0_f32; hw * hh];
+
     for edge in &graph.edges {
         if !edge.active {
             continue;
@@ -145,16 +150,28 @@ pub fn carve_roads(graph: &RoadGraph, heightmap: &mut HeightMap, road_width: f32
 
         for gz in gz_start..=gz_end {
             for gx in gx_start..=gx_end {
-                if is_road_surface[gz * hw + gx] {
+                let idx = gz * hw + gx;
+                if is_road_surface[idx] {
                     continue;
                 }
                 let (dist, road_h) = project_cell(gx, gz, scale, &ep);
-                if dist > half_w && dist <= half_w + scale {
-                    let blend = (dist - half_w) / scale;
-                    let current_h = heightmap.get(gx, gz);
-                    let blended = road_h + blend * (current_h - road_h);
-                    heightmap.set(gx, gz, blended);
+                if dist > half_w && dist <= half_w + scale && dist < embankment_dist[idx] {
+                    embankment_dist[idx] = dist;
+                    embankment_road_h[idx] = road_h;
                 }
+            }
+        }
+    }
+
+    // Now apply the winning embankment blend for each cell.
+    for gz in 0..hh {
+        for gx in 0..hw {
+            let idx = gz * hw + gx;
+            if embankment_dist[idx] < f32::MAX {
+                let blend = (embankment_dist[idx] - half_w) / scale;
+                let current_h = heightmap.get(gx, gz);
+                let blended = embankment_road_h[idx] + blend * (current_h - embankment_road_h[idx]);
+                heightmap.set(gx, gz, blended);
             }
         }
     }
