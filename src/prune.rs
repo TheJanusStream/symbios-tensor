@@ -189,32 +189,99 @@ pub fn prune_unused_roads(graph: &mut RoadGraph, lots: &[BuildingLot]) {
             connected_nodes.insert(curr);
             unreached_essential.remove(&curr);
         } else {
-            // --- PHASE 3: The Bridge Builder ---
-            // Dijkstra failed. We have isolated islands. Build a physical bridge
-            // to the closest unreached house.
-            let mut best_bridge = None;
-            let mut min_bridge_dist = f32::MAX;
+            // Dijkstra failed — unreached nodes are on a disconnected
+            // island. Instead of creating planarity-violating bridge
+            // edges, run a local Steiner tree within the island: seed
+            // from the unreached essential nodes on this component and
+            // connect them through existing active edges.
+            let island_seed: Vec<NodeId> = unreached_essential
+                .iter()
+                .copied()
+                .filter(|&n| {
+                    // Find nodes in same component as the first unreached
+                    comp_ids[n as usize]
+                        == comp_ids[*unreached_essential.iter().next().unwrap() as usize]
+                })
+                .collect();
 
-            for &a in &connected_nodes {
-                let pos_a = graph.nodes[a as usize].position;
-                for &b in &unreached_essential {
-                    let pos_b = graph.nodes[b as usize].position;
-                    let d = pos_a.distance_squared(pos_b);
-                    if d < min_bridge_dist {
-                        min_bridge_dist = d;
-                        best_bridge = Some((a, b));
+            if island_seed.is_empty() {
+                break;
+            }
+
+            // BFS/Dijkstra within the island to connect its essential nodes
+            let island_comp = comp_ids[island_seed[0] as usize];
+            let mut island_connected: HashSet<NodeId> = HashSet::new();
+            island_connected.insert(island_seed[0]);
+            let mut island_remaining: HashSet<NodeId> =
+                island_seed.iter().copied().collect();
+            island_remaining.remove(&island_seed[0]);
+
+            while !island_remaining.is_empty() {
+                let mut heap = BinaryHeap::new();
+                let mut distances = vec![f32::MAX; graph.nodes.len()];
+                let mut came_from: Vec<Option<(NodeId, EdgeId)>> =
+                    vec![None; graph.nodes.len()];
+
+                for &node in &island_connected {
+                    distances[node as usize] = 0.0;
+                    heap.push(State { cost: 0.0, node });
+                }
+
+                let mut found = None;
+                while let Some(State { cost, node }) = heap.pop() {
+                    if island_remaining.contains(&node) {
+                        found = Some(node);
+                        break;
                     }
+                    if cost > distances[node as usize] {
+                        continue;
+                    }
+                    for &edge_id in &graph.nodes[node as usize].edges {
+                        let edge = &graph.edges[edge_id as usize];
+                        if !edge.active {
+                            continue;
+                        }
+                        // Stay within this component
+                        let next = graph.opposite(edge_id, node);
+                        if comp_ids[next as usize] != island_comp {
+                            continue;
+                        }
+                        let d = graph.nodes[node as usize]
+                            .position
+                            .distance(graph.nodes[next as usize].position);
+                        let next_cost = cost + d;
+                        if next_cost < distances[next as usize] {
+                            distances[next as usize] = next_cost;
+                            came_from[next as usize] = Some((node, edge_id));
+                            heap.push(State {
+                                cost: next_cost,
+                                node: next,
+                            });
+                        }
+                    }
+                }
+
+                if let Some(mut curr) = found {
+                    while let Some((prev, edge_id)) = came_from[curr as usize] {
+                        keep_edges.insert(edge_id);
+                        island_connected.insert(curr);
+                        island_remaining.remove(&curr);
+                        curr = prev;
+                    }
+                    island_connected.insert(curr);
+                    island_remaining.remove(&curr);
+                } else {
+                    // Truly unreachable within this component —
+                    // keep whatever essential edges they have and move on
+                    break;
                 }
             }
 
-            if let Some((a, b)) = best_bridge {
-                // Spawn a new major road bridging the gap
-                let new_edge_id = graph.add_edge(a, b, RoadType::Major);
-                keep_edges.insert(new_edge_id);
-                connected_nodes.insert(b);
-                unreached_essential.remove(&b);
-            } else {
-                break; // Failsafe
+            // Mark all island essential nodes as handled so the
+            // outer loop doesn't retry them
+            for n in &island_seed {
+                connected_nodes.insert(*n);
+                unreached_essential.remove(n);
             }
         }
     }

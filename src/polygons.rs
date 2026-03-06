@@ -173,10 +173,12 @@ pub(crate) fn signed_area(nodes: &[NodeId], graph: &RoadGraph) -> f32 {
     if n < 3 {
         return 0.0;
     }
+    // Translate to local origin to avoid f32 cancellation at large coordinates.
+    let origin = graph.nodes[nodes[0] as usize].position;
     let mut area = 0.0_f32;
     for i in 0..n {
-        let a = graph.nodes[nodes[i] as usize].position;
-        let b = graph.nodes[nodes[(i + 1) % n] as usize].position;
+        let a = graph.nodes[nodes[i] as usize].position - origin;
+        let b = graph.nodes[nodes[(i + 1) % n] as usize].position - origin;
         area += a.x * b.y - b.x * a.y;
     }
     area * 0.5
@@ -197,12 +199,14 @@ pub fn block_centroid(block: &CityBlock, graph: &RoadGraph) -> Vec2 {
             .sum();
         return sum / n as f32;
     }
+    // Translate to local origin to avoid f32 cancellation at large coordinates.
+    let origin = graph.nodes[block.perimeter[0] as usize].position;
     let mut cx = 0.0_f32;
     let mut cy = 0.0_f32;
     let mut signed_area_2 = 0.0_f32;
     for i in 0..n {
-        let a = graph.nodes[block.perimeter[i] as usize].position;
-        let b = graph.nodes[block.perimeter[(i + 1) % n] as usize].position;
+        let a = graph.nodes[block.perimeter[i] as usize].position - origin;
+        let b = graph.nodes[block.perimeter[(i + 1) % n] as usize].position - origin;
         let cross = a.x * b.y - b.x * a.y;
         cx += (a.x + b.x) * cross;
         cy += (a.y + b.y) * cross;
@@ -217,5 +221,5 @@ pub fn block_centroid(block: &CityBlock, graph: &RoadGraph) -> Vec2 {
         return sum / n as f32;
     }
     let inv = 1.0 / (3.0 * signed_area_2);
-    Vec2::new(cx * inv, cy * inv)
+    Vec2::new(cx * inv, cy * inv) + origin
 }

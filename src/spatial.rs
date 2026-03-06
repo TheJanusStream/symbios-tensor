@@ -26,16 +26,27 @@ pub struct SpatialHash {
 }
 
 impl SpatialHash {
+    /// Maximum number of cells the grid will allocate. If the requested
+    /// `cell_size` would exceed this, it is automatically enlarged.
+    const MAX_CELLS: usize = 4_000_000;
+
     /// Creates a new spatial hash covering a `world_width` × `world_depth`
-    /// area with cells of the given size.
+    /// area with cells of the given size. If the resulting grid would exceed
+    /// [`Self::MAX_CELLS`], `cell_size` is automatically increased to fit.
     pub fn new(world_width: f32, world_depth: f32, cell_size: f32) -> Self {
-        let cols = (world_width / cell_size).ceil() as usize;
-        let rows = (world_depth / cell_size).ceil() as usize;
-        Self {
-            cell_size,
-            cols,
-            rows,
-            cells: vec![HashCell::default(); cols * rows],
+        let mut cs = cell_size;
+        loop {
+            let cols = (world_width / cs).ceil() as usize;
+            let rows = (world_depth / cs).ceil() as usize;
+            if cols.saturating_mul(rows) <= Self::MAX_CELLS {
+                return Self {
+                    cell_size: cs,
+                    cols,
+                    rows,
+                    cells: vec![HashCell::default(); cols * rows],
+                };
+            }
+            cs *= 2.0;
         }
     }
 

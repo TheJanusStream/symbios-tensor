@@ -30,7 +30,9 @@ pub struct TensorConfig {
     pub snap_radius: f32,
     /// Maximum number of integration steps per trace before it is abandoned.
     pub max_trace_steps: u32,
-    /// Absolute world-space Y coordinate for the water plane
+    /// Absolute world-space Y coordinate for the water plane.
+    /// Terrain at or below this height is treated as underwater.
+    /// Defaults to [`f32::NEG_INFINITY`] (no water).
     pub water_level: f32,
 }
 
@@ -43,7 +45,7 @@ impl Default for TensorConfig {
             minor_road_dist: 15.0,
             snap_radius: 4.0,
             max_trace_steps: 300,
-            water_level: 0.0,
+            water_level: f32::NEG_INFINITY,
         }
     }
 }
@@ -111,8 +113,8 @@ pub fn generate_roads(heightmap: &HeightMap, config: &TensorConfig) -> RoadGraph
             let jitter_z: f32 = rng.random_range(-config.step_size..config.step_size);
             let pos = Vec2::new(x + jitter_x, z + jitter_z);
 
-            // Do not spawn seeds underwater (strictly below water level)
-            if heightmap.get_height_at(pos.x, pos.y) < config.water_level {
+            // Do not spawn seeds underwater (at or below water level)
+            if heightmap.get_height_at(pos.x, pos.y) <= config.water_level {
                 z += config.major_road_dist;
                 continue;
             }
@@ -224,7 +226,7 @@ fn trace_streamline(
         }
 
         // Coastline collision. If the proposed step dips underwater, abort the trace.
-        if field.heightmap.get_height_at(proposed.x, proposed.y) < config.water_level {
+        if field.heightmap.get_height_at(proposed.x, proposed.y) <= config.water_level {
             break;
         }
 
@@ -261,6 +263,11 @@ fn trace_streamline(
                 edge_id,
                 intersection_pos,
             } => {
+                let split_edge = &graph.edges[edge_id as usize];
+                let edge_dir = (graph.node_pos(split_edge.end)
+                    - graph.node_pos(split_edge.start))
+                .normalize_or_zero();
+
                 let (mid_node, ea, eb) = graph.split_edge(edge_id, intersection_pos);
                 spatial.insert_node(mid_node, intersection_pos);
 
@@ -275,6 +282,16 @@ fn trace_streamline(
                     graph.node_pos(current_node),
                     intersection_pos,
                 );
+
+                // If the trace direction is nearly parallel to the edge
+                // we just split, continuing would create overlapping
+                // geometry invisible to resolve_trace_step (the split
+                // halves are connected to mid_node and thus skipped).
+                let alignment = dir.dot(edge_dir).abs();
+                if alignment > 0.9 {
+                    break;
+                }
+
                 // Continue tracing through the intersection so that
                 // 4-way crossings form naturally instead of dead-ending
                 // at every T-junction.

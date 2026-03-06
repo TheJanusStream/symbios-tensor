@@ -85,10 +85,29 @@ pub fn extract_lots(
         let sub_polys = subdivide_polygon(&polygon, config.max_lot_area, config.min_lot_area, 10);
 
         for poly in sub_polys {
-            if let Some(lot) = polygon_to_lot(&poly, &polygon, config)
-                && heightmap.get_height_at(lot.position.x, lot.position.y) >= water_level
-            {
-                lots.push(lot);
+            if let Some(lot) = polygon_to_lot(&poly, &polygon, config) {
+                let hw = lot.width * 0.5;
+                let hd = lot.depth * 0.5;
+                let cos = lot.rotation.cos();
+                let sin = lot.rotation.sin();
+
+                let corners = [
+                    Vec2::new(hw * cos - hd * sin, hw * sin + hd * cos),
+                    Vec2::new(hw * cos - (-hd) * sin, hw * sin + (-hd) * cos),
+                    Vec2::new(-hw * cos - hd * sin, -hw * sin + hd * cos),
+                    Vec2::new(-hw * cos - (-hd) * sin, -hw * sin + (-hd) * cos),
+                ];
+
+                let is_above_water = heightmap.get_height_at(lot.position.x, lot.position.y)
+                    > water_level
+                    && corners.iter().all(|c| {
+                        heightmap.get_height_at(lot.position.x + c.x, lot.position.y + c.y)
+                            > water_level
+                    });
+
+                if is_above_water {
+                    lots.push(lot);
+                }
             }
         }
     }
@@ -104,10 +123,12 @@ fn polygon_area(vertices: &[Vec2]) -> f32 {
     if n < 3 {
         return 0.0;
     }
+    // Translate to local origin to avoid f32 cancellation at large coordinates.
+    let origin = vertices[0];
     let mut area = 0.0_f32;
     for i in 0..n {
-        let a = vertices[i];
-        let b = vertices[(i + 1) % n];
+        let a = vertices[i] - origin;
+        let b = vertices[(i + 1) % n] - origin;
         area += a.x * b.y - b.x * a.y;
     }
     (area * 0.5).abs()
@@ -121,12 +142,14 @@ fn polygon_centroid(vertices: &[Vec2]) -> Vec2 {
     if n < 3 {
         return vertices.iter().copied().sum::<Vec2>() / n as f32;
     }
+    // Translate to local origin to avoid f32 cancellation at large coordinates.
+    let origin = vertices[0];
     let mut cx = 0.0_f32;
     let mut cy = 0.0_f32;
     let mut signed_area_2 = 0.0_f32;
     for i in 0..n {
-        let a = vertices[i];
-        let b = vertices[(i + 1) % n];
+        let a = vertices[i] - origin;
+        let b = vertices[(i + 1) % n] - origin;
         let cross = a.x * b.y - b.x * a.y;
         cx += (a.x + b.x) * cross;
         cy += (a.y + b.y) * cross;
@@ -136,7 +159,7 @@ fn polygon_centroid(vertices: &[Vec2]) -> Vec2 {
         return vertices.iter().copied().sum::<Vec2>() / n as f32;
     }
     let inv = 1.0 / (3.0 * signed_area_2);
-    Vec2::new(cx * inv, cy * inv)
+    Vec2::new(cx * inv, cy * inv) + origin
 }
 
 fn longest_edge_index(vertices: &[Vec2]) -> usize {
@@ -156,6 +179,15 @@ fn longest_edge_index(vertices: &[Vec2]) -> usize {
 // ---------------------------------------------------------------------------
 // Polygon splitting
 // ---------------------------------------------------------------------------
+
+/// Removes consecutive vertices that are closer than 1e-4 apart.
+fn dedup_consecutive(poly: &mut Vec<Vec2>) {
+    poly.dedup_by(|a, b| a.distance(*b) < 1e-4);
+    // Also check wrap-around (last vs first)
+    if poly.len() > 1 && poly.first().unwrap().distance(*poly.last().unwrap()) < 1e-4 {
+        poly.pop();
+    }
+}
 
 fn split_polygon_by_line(
     poly: &[Vec2],
@@ -204,6 +236,12 @@ fn split_polygon_by_line(
         k = (k + 1) % n;
     }
     poly_b.push(pt_a);
+
+    // Remove consecutive duplicate vertices (from split points coinciding
+    // with existing polygon vertices), which would produce zero-length
+    // edges and NaN in subsequent normalizations.
+    dedup_consecutive(&mut poly_a);
+    dedup_consecutive(&mut poly_b);
 
     // Filter degenerate results
     if poly_a.len() < 3 || poly_b.len() < 3 {
