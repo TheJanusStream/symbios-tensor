@@ -14,7 +14,7 @@ use symbios_ground::HeightMap;
 /// - **Major** (contour): follows elevation lines — ideal for winding mountain roads.
 /// - **Minor** (gradient): points up/down the slope — ideal for steep connecting streets.
 pub struct TensorField<'a> {
-    heightmap: &'a HeightMap,
+    pub(crate) heightmap: &'a HeightMap,
 }
 
 impl<'a> TensorField<'a> {

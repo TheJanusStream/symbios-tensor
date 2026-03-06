@@ -108,6 +108,7 @@ fn carve_modifies_heightmap() {
         minor_road_dist: 5.0,
         snap_radius: 2.0,
         max_trace_steps: 50,
+        water_level: 0.0,
     };
     let graph = generate_roads(&hm, &config);
 

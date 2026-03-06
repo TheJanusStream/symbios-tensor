@@ -30,6 +30,8 @@ pub struct TensorConfig {
     pub snap_radius: f32,
     /// Maximum number of integration steps per trace before it is abandoned.
     pub max_trace_steps: u32,
+    /// Absolute world-space Y coordinate for the water plane
+    pub water_level: f32,
 }
 
 impl Default for TensorConfig {
@@ -41,6 +43,7 @@ impl Default for TensorConfig {
             minor_road_dist: 15.0,
             snap_radius: 4.0,
             max_trace_steps: 300,
+            water_level: 0.0,
         }
     }
 }
@@ -107,6 +110,13 @@ pub fn generate_roads(heightmap: &HeightMap, config: &TensorConfig) -> RoadGraph
             let jitter_x: f32 = rng.random_range(-config.step_size..config.step_size);
             let jitter_z: f32 = rng.random_range(-config.step_size..config.step_size);
             let pos = Vec2::new(x + jitter_x, z + jitter_z);
+
+            // Do not spawn seeds underwater
+            if heightmap.get_height_at(pos.x, pos.y) <= config.water_level {
+                z += config.major_road_dist;
+                continue;
+            }
+
             let (major, minor) = field.sample(pos.x, pos.y);
 
             // Create a shared starting node for all traces from this seed
@@ -210,6 +220,11 @@ fn trace_streamline(
         // Bounds check
         if proposed.x < 0.0 || proposed.x >= bounds.x || proposed.y < 0.0 || proposed.y >= bounds.y
         {
+            break;
+        }
+
+        // Coastline collision. If the proposed step dips underwater, abort the trace.
+        if field.heightmap.get_height_at(proposed.x, proposed.y) <= config.water_level {
             break;
         }
 

@@ -14,7 +14,7 @@ categories = ["simulation", "game-development", "mathematics"]
 glam = { version = "0.30.10", features = ["serde"] }
 rand = "0.9"
 rand_pcg = "0.9"
-symbios-ground = "0.1"
+symbios-ground = { path = "../symbios-ground" }
 serde = { version = "1.0", features = ["derive", "rc"] }
 
 [dev-dependencies]
