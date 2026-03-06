@@ -8,6 +8,7 @@
 
 use glam::Vec2;
 use serde::{Deserialize, Serialize};
+use symbios_ground::HeightMap;
 
 use crate::geometry::segment_intersection;
 use crate::graph::RoadGraph;
@@ -50,6 +51,9 @@ impl Default for LotConfig {
 pub struct BuildingLot {
     /// World-space center of the footprint.
     pub position: Vec2,
+    /// Midpoint of the street frontage edge (pre-setback), used for road
+    /// access queries so that pruning doesn't misidentify the access road.
+    pub frontage_center: Vec2,
     /// Rotation angle in radians (around the Y axis in 3D; around Z in 2D top-down).
     pub rotation: f32,
     /// Extent along the street frontage.
@@ -62,8 +66,14 @@ pub struct BuildingLot {
 ///
 /// Each block polygon is recursively subdivided until pieces are below
 /// `config.max_lot_area`, then a street-aligned inscribed rectangle is
-/// computed with setbacks applied.
-pub fn extract_lots(graph: &RoadGraph, config: &LotConfig) -> Vec<BuildingLot> {
+/// computed with setbacks applied. Lots whose center falls below the
+/// water level are discarded.
+pub fn extract_lots(
+    graph: &RoadGraph,
+    heightmap: &HeightMap,
+    water_level: f32,
+    config: &LotConfig,
+) -> Vec<BuildingLot> {
     let mut lots = Vec::new();
     for block in &graph.blocks {
         let polygon: Vec<Vec2> = block
@@ -75,7 +85,9 @@ pub fn extract_lots(graph: &RoadGraph, config: &LotConfig) -> Vec<BuildingLot> {
         let sub_polys = subdivide_polygon(&polygon, config.max_lot_area, config.min_lot_area, 10);
 
         for poly in sub_polys {
-            if let Some(lot) = polygon_to_lot(&poly, &polygon, config) {
+            if let Some(lot) = polygon_to_lot(&poly, &polygon, config)
+                && heightmap.get_height_at(lot.position.x, lot.position.y) >= water_level
+            {
                 lots.push(lot);
             }
         }
@@ -395,6 +407,7 @@ fn inscribed_box(poly: &[Vec2], frontage_idx: usize) -> Option<(Vec2, f32, f32, 
 
 fn apply_setbacks(
     center: Vec2,
+    frontage_center: Vec2,
     rotation: f32,
     width: f32,
     depth: f32,
@@ -415,6 +428,7 @@ fn apply_setbacks(
 
     Some(BuildingLot {
         position: adjusted_center,
+        frontage_center,
         rotation,
         width: new_width,
         depth: new_depth,
@@ -431,8 +445,10 @@ fn polygon_to_lot(poly: &[Vec2], perimeter: &[Vec2], config: &LotConfig) -> Opti
     }
 
     let (frontage_idx, _) = find_frontage(poly, perimeter);
+    let n = poly.len();
+    let frontage_center = (poly[frontage_idx] + poly[(frontage_idx + 1) % n]) * 0.5;
     let (center, rotation, width, depth) = inscribed_box(poly, frontage_idx)?;
-    apply_setbacks(center, rotation, width, depth, config)
+    apply_setbacks(center, frontage_center, rotation, width, depth, config)
 }
 
 // ---------------------------------------------------------------------------
@@ -546,14 +562,15 @@ mod tests {
             ..Default::default()
         };
         // Width 5 - 2*1.5 = 2 < 6 → filtered
-        let result = apply_setbacks(Vec2::ZERO, 0.0, 5.0, 20.0, &config);
+        let result = apply_setbacks(Vec2::ZERO, Vec2::ZERO, 0.0, 5.0, 20.0, &config);
         assert!(result.is_none());
     }
 
     #[test]
     fn extract_lots_empty_graph() {
+        let hm = symbios_ground::HeightMap::new(8, 8, 1.0);
         let graph = RoadGraph::default();
-        let lots = extract_lots(&graph, &LotConfig::default());
+        let lots = extract_lots(&graph, &hm, 0.0, &LotConfig::default());
         assert!(lots.is_empty());
     }
 }

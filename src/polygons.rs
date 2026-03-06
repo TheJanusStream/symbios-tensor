@@ -141,9 +141,12 @@ fn pick_next_face_edge(
     let mut best: Option<NodeId> = None;
     let mut best_delta = f32::MAX;
 
+    let has_alternatives = neighbours.len() > 1;
     for &(to, _) in neighbours {
-        // Topological U-turn check: skip the node we came from.
-        if to == prev {
+        // Topological U-turn check: skip the node we came from, unless this
+        // is a dead-end (degree-1 node) where a U-turn is required to walk
+        // back out of an antenna edge during face traversal.
+        if to == prev && has_alternatives {
             continue;
         }
 

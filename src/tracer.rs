@@ -111,8 +111,8 @@ pub fn generate_roads(heightmap: &HeightMap, config: &TensorConfig) -> RoadGraph
             let jitter_z: f32 = rng.random_range(-config.step_size..config.step_size);
             let pos = Vec2::new(x + jitter_x, z + jitter_z);
 
-            // Do not spawn seeds underwater
-            if heightmap.get_height_at(pos.x, pos.y) <= config.water_level {
+            // Do not spawn seeds underwater (strictly below water level)
+            if heightmap.get_height_at(pos.x, pos.y) < config.water_level {
                 z += config.major_road_dist;
                 continue;
             }
@@ -224,7 +224,7 @@ fn trace_streamline(
         }
 
         // Coastline collision. If the proposed step dips underwater, abort the trace.
-        if field.heightmap.get_height_at(proposed.x, proposed.y) <= config.water_level {
+        if field.heightmap.get_height_at(proposed.x, proposed.y) < config.water_level {
             break;
         }
 

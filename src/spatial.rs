@@ -215,15 +215,28 @@ pub fn resolve_trace_step(
 
         if dist_to_start < snap_sq && dist_to_start <= dist_to_end {
             let nid = edge.start;
-            if nid != current_node_id && !current_neighbours.contains(&nid) {
+            // Always snap to the nearby endpoint to preserve planarity.
+            // Even if nid is a neighbour or current_node, returning
+            // SnappedToNode lets the tracer handle it (duplicate-edge
+            // check + break) rather than falling through to Clear.
+            if nid != current_node_id {
                 return TraceResult::SnappedToNode(nid);
             }
-            // Near a neighbour endpoint — fall through to Clear
+            // Intersection is at our own position — edge is adjacent,
+            // split it to maintain planarity.
+            return TraceResult::SnappedToEdge {
+                edge_id,
+                intersection_pos,
+            };
         } else if dist_to_end < snap_sq {
             let nid = edge.end;
-            if nid != current_node_id && !current_neighbours.contains(&nid) {
+            if nid != current_node_id {
                 return TraceResult::SnappedToNode(nid);
             }
+            return TraceResult::SnappedToEdge {
+                edge_id,
+                intersection_pos,
+            };
         } else {
             return TraceResult::SnappedToEdge {
                 edge_id,

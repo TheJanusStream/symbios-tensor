@@ -154,8 +154,10 @@ fn extract_lots_produces_buildings() {
         perimeter: vec![n0, n1, n2, n3],
     });
 
+    // Heightmap large enough to cover the block, all above water
+    let hm = HeightMap::new(32, 32, 2.0);
     let lot_config = LotConfig::default();
-    let lots = extract_lots(&graph, &lot_config);
+    let lots = extract_lots(&graph, &hm, 0.0, &lot_config);
 
     assert!(!lots.is_empty(), "should produce at least one building lot");
 

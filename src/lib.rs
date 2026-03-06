@@ -39,7 +39,7 @@
 //! extract_blocks(&mut graph);
 //!
 //! // 3. Subdivide blocks into building lots
-//! let lots = extract_lots(&graph, &LotConfig::default());
+//! let lots = extract_lots(&graph, &heightmap, 0.0, &LotConfig::default());
 //!
 //! // 4. Carve roads and lots into terrain
 //! let mut hm = heightmap;

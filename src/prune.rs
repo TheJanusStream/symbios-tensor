@@ -82,8 +82,8 @@ pub fn prune_unused_roads(graph: &mut RoadGraph, lots: &[BuildingLot]) {
             }
             let a = graph.nodes[edge.start as usize].position;
             let b = graph.nodes[edge.end as usize].position;
-            let proj = closest_point_on_segment(lot.position, a, b);
-            let dist = lot.position.distance(proj);
+            let proj = closest_point_on_segment(lot.frontage_center, a, b);
+            let dist = lot.frontage_center.distance(proj);
 
             let comp_id = comp_ids[edge.start as usize];
             let comp_size = comp_sizes[&comp_id];
