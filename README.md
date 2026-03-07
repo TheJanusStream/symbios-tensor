@@ -28,10 +28,12 @@ field falls back to an axis-aligned Manhattan grid.
 
 4. **Terrain carving** (`carve_roads`, `carve_lots`) — Flattens the heightmap
    under roads and building foundations with smooth embankment blending at the
-   edges. `carve_roads` returns a boolean road-surface mask so that
-   `carve_lots` can avoid overwriting already-flattened pavement. A two-pass
-   road carving approach prevents embankments from overwriting previously
-   flattened pavement at intersections.
+   edges. Both functions accept a configurable `blend_radius` that controls
+   how far the embankment zone extends beyond the surface — larger values
+   produce wider, gentler slopes on steep terrain. `carve_roads` returns a
+   boolean road-surface mask so that `carve_lots` can avoid overwriting
+   already-flattened pavement. A two-pass road carving approach prevents
+   embankments from overwriting previously flattened pavement at intersections.
 
 5. **Road pruning** (`prune_unused_roads`) — Optionally removes roads that do
    not serve any building lot. Uses Dijkstra-based Steiner tree construction
@@ -58,7 +60,7 @@ let lots = extract_lots(&graph, &heightmap, config.water_level, &LotConfig::defa
 
 // 4. Carve roads and lots into terrain
 let mut hm = heightmap;
-let road_mask = carve_roads(&graph, &mut hm, 6.0);
+let road_mask = carve_roads(&graph, &mut hm, 6.0, 4.0);
 carve_lots(&lots, &mut hm, 2.0, Some(&road_mask));
 
 // 5. (Optional) Prune roads that don't serve any lot

@@ -63,6 +63,6 @@ fn main() {
     }
 
     // 5. Carve roads into the terrain
-    let _ = carve_roads(&graph, &mut hm, 2.0);
+    let _ = carve_roads(&graph, &mut hm, 2.0, 1.0);
     println!("\nTerrain carved along {} active road edges.", active);
 }

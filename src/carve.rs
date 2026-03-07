@@ -72,7 +72,9 @@ pub fn carve_lots(
                 let dist_to_edge = dist_x.max(0.0).hypot(dist_z.max(0.0));
 
                 // Never overwrite cells that are part of a road surface.
-                if let Some(mask) = road_surface && mask[gz * hw + gx] {
+                if let Some(mask) = road_surface
+                    && mask[gz * hw + gx]
+                {
                     continue;
                 }
 
@@ -95,10 +97,19 @@ pub fn carve_lots(
 /// Flattens the heightmap along road edges, creating smooth graded surfaces
 /// where roads are placed, with blended embankments at the edges.
 ///
+/// `blend_radius` controls how far the embankment zone extends beyond the
+/// road surface. Larger values produce wider, gentler slopes — useful on
+/// steep terrain where an abrupt one-cell transition would look unnatural.
+///
 /// Uses a two-pass approach: first all road surfaces are flattened, then
 /// embankments are blended. This prevents later embankments from overwriting
 /// previously flattened road pavement at intersections.
-pub fn carve_roads(graph: &RoadGraph, heightmap: &mut HeightMap, road_width: f32) -> Vec<bool> {
+pub fn carve_roads(
+    graph: &RoadGraph,
+    heightmap: &mut HeightMap,
+    road_width: f32,
+    blend_radius: f32,
+) -> Vec<bool> {
     let scale = heightmap.scale();
     let hw = heightmap.width();
     let hh = heightmap.height();
@@ -156,7 +167,7 @@ pub fn carve_roads(graph: &RoadGraph, heightmap: &mut HeightMap, road_width: f32
         let ep = (start_pos, end_pos, start_h, end_h);
 
         let (gx_start, gx_end, gz_start, gz_end) =
-            edge_grid_bounds(start_pos, end_pos, half_w + scale, scale, hw, hh);
+            edge_grid_bounds(start_pos, end_pos, half_w + blend_radius, scale, hw, hh);
 
         for gz in gz_start..=gz_end {
             for gx in gx_start..=gx_end {
@@ -165,7 +176,7 @@ pub fn carve_roads(graph: &RoadGraph, heightmap: &mut HeightMap, road_width: f32
                     continue;
                 }
                 let (dist, road_h) = project_cell(gx, gz, scale, &ep);
-                if dist > half_w && dist <= half_w + scale && dist < embankment_dist[idx] {
+                if dist > half_w && dist <= half_w + blend_radius && dist < embankment_dist[idx] {
                     embankment_dist[idx] = dist;
                     embankment_road_h[idx] = road_h;
                 }
@@ -178,7 +189,7 @@ pub fn carve_roads(graph: &RoadGraph, heightmap: &mut HeightMap, road_width: f32
         for gx in 0..hw {
             let idx = gz * hw + gx;
             if embankment_dist[idx] < f32::MAX {
-                let blend = (embankment_dist[idx] - half_w) / scale;
+                let blend = (embankment_dist[idx] - half_w) / blend_radius;
                 let current_h = heightmap.get(gx, gz);
                 let blended = embankment_road_h[idx] + blend * (current_h - embankment_road_h[idx]);
                 heightmap.set(gx, gz, blended);

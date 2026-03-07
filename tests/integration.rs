@@ -113,7 +113,7 @@ fn carve_modifies_heightmap() {
     let graph = generate_roads(&hm, &config);
 
     if graph.edges.iter().any(|e| e.active) {
-        let _ = carve_roads(&graph, &mut hm, 2.0);
+        let _ = carve_roads(&graph, &mut hm, 2.0, 1.0);
         let carved_sum: f32 = hm.data().iter().sum();
         assert!(
             (carved_sum - original_sum).abs() > 1e-3,
