@@ -28,8 +28,15 @@ field falls back to an axis-aligned Manhattan grid.
 
 4. **Terrain carving** (`carve_roads`, `carve_lots`) — Flattens the heightmap
    under roads and building foundations with smooth embankment blending at the
-   edges. A two-pass road carving approach prevents embankments from
-   overwriting previously flattened pavement at intersections.
+   edges. `carve_roads` returns a boolean road-surface mask so that
+   `carve_lots` can avoid overwriting already-flattened pavement. A two-pass
+   road carving approach prevents embankments from overwriting previously
+   flattened pavement at intersections.
+
+5. **Road pruning** (`prune_unused_roads`) — Optionally removes roads that do
+   not serve any building lot. Uses Dijkstra-based Steiner tree construction
+   to keep only the minimal connected sub-network that reaches every lot's
+   frontage edge, preferring major roads over minor ones.
 
 ## Quick start
 
@@ -51,8 +58,11 @@ let lots = extract_lots(&graph, &heightmap, config.water_level, &LotConfig::defa
 
 // 4. Carve roads and lots into terrain
 let mut hm = heightmap;
-carve_roads(&graph, &mut hm, 6.0);
-carve_lots(&lots, &mut hm, 2.0);
+let road_mask = carve_roads(&graph, &mut hm, 6.0);
+carve_lots(&lots, &mut hm, 2.0, Some(&road_mask));
+
+// 5. (Optional) Prune roads that don't serve any lot
+prune_unused_roads(&mut graph, &lots);
 ```
 
 ## Configuration
@@ -67,6 +77,7 @@ carve_lots(&lots, &mut hm, 2.0);
 | `minor_road_dist` | `15.0` | Spacing between parallel minor roads (streets) |
 | `snap_radius` | `4.0` | Merge radius for snapping trace endpoints to existing geometry |
 | `max_trace_steps` | `300` | Maximum integration steps per trace before abandoning |
+| `water_level` | `-inf` | World-space Y height of the water plane; terrain at or below this is treated as underwater |
 
 ### `LotConfig`
 
@@ -92,6 +103,7 @@ carve_lots(&lots, &mut hm, 2.0);
 | `polygons` | Minimum-cycle-basis block extraction and centroid computation |
 | `lots` | Recursive subdivision, frontage detection, inscribed box, setbacks |
 | `carve` | Heightmap flattening for roads and building foundations |
+| `prune` | Steiner-tree road pruning to remove unused roads |
 
 ## Dependencies
 

@@ -21,7 +21,11 @@
 //!    front/side/rear setbacks.
 //! 4. **Terrain carving** — [`carve_roads`] and [`carve_lots`] flatten the
 //!    heightmap under roads and building foundations with smooth embankment
-//!    blending at the edges.
+//!    blending at the edges. `carve_roads` returns a boolean road-surface mask
+//!    so that `carve_lots` can avoid overwriting already-flattened pavement.
+//! 5. **Road pruning** — [`prune_unused_roads`] optionally removes roads that
+//!    do not serve any building lot, keeping only the minimal connected
+//!    sub-network via Dijkstra-based Steiner tree construction.
 //!
 //! # Quick start
 //!
@@ -45,6 +49,9 @@
 //! let mut hm = heightmap;
 //! let road_mask = carve_roads(&graph, &mut hm, 6.0);
 //! carve_lots(&lots, &mut hm, 2.0, Some(&road_mask));
+//!
+//! // 5. (Optional) Prune roads that don't serve any lot
+//! prune_unused_roads(&mut graph, &lots);
 //! ```
 
 pub mod carve;

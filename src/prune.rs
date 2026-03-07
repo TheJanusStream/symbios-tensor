@@ -1,3 +1,12 @@
+//! Road pruning via Steiner tree construction.
+//!
+//! After lots are placed, many road segments may not serve any building.
+//! [`prune_unused_roads`] identifies the minimal connected sub-network that
+//! reaches every lot's frontage edge using Dijkstra shortest paths (preferring
+//! major roads), then deactivates all edges outside that sub-network.
+//! Disconnected components are handled independently so lots on isolated
+//! islands still retain their access roads.
+
 use crate::geometry::closest_point_on_segment;
 use crate::graph::{EdgeId, NodeId, RoadGraph, RoadType};
 use crate::lots::BuildingLot;
@@ -27,6 +36,13 @@ impl PartialOrd for State {
     }
 }
 
+/// Deactivates road edges that are not needed to reach any building lot.
+///
+/// For each lot the closest active edge (by frontage center) is marked
+/// essential, then a Dijkstra-based Steiner tree connects all essential
+/// nodes through the cheapest path (major roads are 5× cheaper than minor
+/// roads). Edges outside the resulting tree are deactivated. If no lots
+/// exist, all edges are deactivated.
 pub fn prune_unused_roads(graph: &mut RoadGraph, lots: &[BuildingLot]) {
     if lots.is_empty() {
         for edge in &mut graph.edges {

@@ -47,6 +47,11 @@ pub struct RoadEdge {
     pub active: bool,
 }
 
+/// An enclosed city block bounded by road edges.
+///
+/// The perimeter is a closed polygon of node indices extracted by
+/// [`crate::polygons::extract_blocks`] using the left-most-turn algorithm.
+/// Blocks always wind clockwise (negative signed area).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CityBlock {
     /// Ordered list of node indices forming a closed polygon perimeter.
