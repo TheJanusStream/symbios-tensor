@@ -193,17 +193,26 @@ pub(crate) fn signed_area(nodes: &[NodeId], graph: &RoadGraph) -> f32 {
 /// An antenna appears as `...A → B → ... → B → A...` where the walker
 /// traveled down a dead-end and U-turned back. This collapses each such
 /// spike so the perimeter is a simple polygon.
+///
+/// To avoid accidentally draining the valid block body when the walk
+/// starts inside a dead-end (duplicate at index 0 and near the end),
+/// we always drain the *shorter* span between the two occurrences.
 fn strip_antennas(cycle: &mut Vec<NodeId>) {
-    // Repeatedly scan for the first duplicate node and remove the spike
-    // between its two occurrences. This is O(n²) in the worst case but
-    // perimeters are typically small (<50 nodes).
     loop {
         let mut found = false;
         'outer: for i in 0..cycle.len() {
             for j in (i + 1)..cycle.len() {
                 if cycle[i] == cycle[j] {
-                    // Remove the spike: keep cycle[i], drop i+1..=j
-                    cycle.drain((i + 1)..=j);
+                    let spike_len = j - i;
+                    let rest_len = cycle.len() - spike_len;
+                    if spike_len <= rest_len {
+                        // Spike is the shorter span: drain i+1..=j
+                        cycle.drain((i + 1)..=j);
+                    } else {
+                        // Spike wraps around — the valid block is between
+                        // i and j. Keep only that portion.
+                        *cycle = cycle[i..j].to_vec();
+                    }
                     found = true;
                     break 'outer;
                 }

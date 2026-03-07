@@ -14,7 +14,12 @@ use crate::lots::BuildingLot;
 /// Each lot's footprint is set to a uniform foundation height (sampled at the
 /// lot center). Grid cells within `blend_radius` of the footprint edge are
 /// linearly interpolated between the foundation and natural terrain height.
-pub fn carve_lots(lots: &[BuildingLot], heightmap: &mut HeightMap, blend_radius: f32) {
+pub fn carve_lots(
+    lots: &[BuildingLot],
+    heightmap: &mut HeightMap,
+    blend_radius: f32,
+    road_surface: Option<&[bool]>,
+) {
     let scale = heightmap.scale();
     let hw = heightmap.width();
     let hh = heightmap.height();
@@ -66,6 +71,11 @@ pub fn carve_lots(lots: &[BuildingLot], heightmap: &mut HeightMap, blend_radius:
                 // If > 0, we use length() to get rounded corners on the blend zone.
                 let dist_to_edge = dist_x.max(0.0).hypot(dist_z.max(0.0));
 
+                // Never overwrite cells that are part of a road surface.
+                if let Some(mask) = road_surface && mask[gz * hw + gx] {
+                    continue;
+                }
+
                 if dist_to_edge <= 0.0 {
                     // Strictly inside the footprint: Flat foundation
                     heightmap.set(gx, gz, target_h);
@@ -88,12 +98,12 @@ pub fn carve_lots(lots: &[BuildingLot], heightmap: &mut HeightMap, blend_radius:
 /// Uses a two-pass approach: first all road surfaces are flattened, then
 /// embankments are blended. This prevents later embankments from overwriting
 /// previously flattened road pavement at intersections.
-pub fn carve_roads(graph: &RoadGraph, heightmap: &mut HeightMap, road_width: f32) {
+pub fn carve_roads(graph: &RoadGraph, heightmap: &mut HeightMap, road_width: f32) -> Vec<bool> {
     let scale = heightmap.scale();
     let hw = heightmap.width();
     let hh = heightmap.height();
     if hw == 0 || hh == 0 {
-        return;
+        return Vec::new();
     }
 
     let half_w = road_width * 0.5;
@@ -175,6 +185,8 @@ pub fn carve_roads(graph: &RoadGraph, heightmap: &mut HeightMap, road_width: f32
             }
         }
     }
+
+    is_road_surface
 }
 
 use crate::graph::RoadEdge;

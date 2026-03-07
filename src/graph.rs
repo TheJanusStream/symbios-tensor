@@ -104,6 +104,11 @@ impl RoadGraph {
 
         self.edges[edge_id as usize].active = false;
 
+        // Remove the now-inactive edge from its endpoint adjacency lists
+        // to prevent unbounded accumulation of stale IDs.
+        self.nodes[start as usize].edges.retain(|&e| e != edge_id);
+        self.nodes[end as usize].edges.retain(|&e| e != edge_id);
+
         let mid = self.add_node(split_pos);
         let ea = self.add_edge(start, mid, road_type);
         let eb = self.add_edge(mid, end, road_type);

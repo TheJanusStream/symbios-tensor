@@ -6,6 +6,8 @@
 //! T-junctions and 4-way intersections. Orthogonal branches are spawned at
 //! configurable intervals to fill the network.
 
+use std::collections::VecDeque;
+
 use glam::Vec2;
 use rand::Rng;
 use rand_pcg::Pcg64;
@@ -102,7 +104,7 @@ pub fn generate_roads(heightmap: &HeightMap, config: &TensorConfig) -> RoadGraph
 
     // --- Seed generation ---
     // Drop seeds along a grid at `major_road_dist` spacing, jittered slightly.
-    let mut active: Vec<Seed> = Vec::new();
+    let mut active: VecDeque<Seed> = VecDeque::new();
 
     let margin = config.major_road_dist * 0.5;
     let mut x = margin;
@@ -127,7 +129,7 @@ pub fn generate_roads(heightmap: &HeightMap, config: &TensorConfig) -> RoadGraph
 
             // Trace both directions along each axis to form full through-lines
             for &dir in &[major, -major] {
-                active.push(Seed {
+                active.push_back(Seed {
                     position: pos,
                     direction: dir,
                     road_type: RoadType::Major,
@@ -136,7 +138,7 @@ pub fn generate_roads(heightmap: &HeightMap, config: &TensorConfig) -> RoadGraph
                 });
             }
             for &dir in &[minor, -minor] {
-                active.push(Seed {
+                active.push_back(Seed {
                     position: pos,
                     direction: dir,
                     road_type: RoadType::Minor,
@@ -155,7 +157,7 @@ pub fn generate_roads(heightmap: &HeightMap, config: &TensorConfig) -> RoadGraph
     // Cap total traces to prevent runaway branching in circular tensor flows.
     let max_traces = active.len() * 50;
     let mut trace_count = 0_usize;
-    while let Some(seed) = active.pop() {
+    while let Some(seed) = active.pop_front() {
         trace_count += 1;
         if trace_count > max_traces {
             break;
@@ -178,7 +180,7 @@ fn trace_streamline(
     field: &TensorField<'_>,
     graph: &mut RoadGraph,
     spatial: &mut SpatialHash,
-    active: &mut Vec<Seed>,
+    active: &mut VecDeque<Seed>,
     seed: Seed,
     config: &TensorConfig,
     bounds: Vec2,
@@ -305,7 +307,7 @@ fn trace_streamline(
             RoadType::Minor => config.major_road_dist,
         };
         if branch_accum >= branch_dist {
-            branch_accum = 0.0;
+            branch_accum -= branch_dist;
             let (field_major, field_minor) = field.sample(proposed.x, proposed.y);
             let branch_dir = match seed.road_type {
                 RoadType::Major => field_minor,
@@ -316,7 +318,7 @@ fn trace_streamline(
                 RoadType::Minor => RoadType::Major,
             };
             for &dir_sign in &[1.0_f32, -1.0] {
-                active.push(Seed {
+                active.push_back(Seed {
                     position: graph.node_pos(current_node),
                     direction: branch_dir * dir_sign,
                     road_type: branch_type,

@@ -124,21 +124,22 @@ pub fn prune_unused_roads(graph: &mut RoadGraph, lots: &[BuildingLot]) {
         unreached_essential.remove(&start_node);
     }
 
-    // Pre-allocate Dijkstra buffers and reuse across iterations to avoid
-    // repeated allocation/deallocation of large vectors.
+    // Pre-allocate Dijkstra buffers with generation counters for O(1) resets.
+    // A distance/came_from entry is only valid when its generation matches
+    // `current_gen`, avoiding costly O(V) fills each iteration.
     let num_nodes = graph.nodes.len();
     let mut heap = BinaryHeap::new();
-    let mut distances = vec![f32::MAX; num_nodes];
-    let mut came_from: Vec<Option<(NodeId, EdgeId)>> = vec![None; num_nodes];
+    let mut dist_gen = vec![(0_u32, f32::MAX); num_nodes];
+    let mut from_gen: Vec<(u32, Option<(NodeId, EdgeId)>)> = vec![(0, None); num_nodes];
+    let mut current_gen = 0_u32;
 
     // Loop until EVERY house is connected
     while !unreached_essential.is_empty() {
         heap.clear();
-        distances.fill(f32::MAX);
-        came_from.fill(None);
+        current_gen += 1;
 
         for &node in &connected_nodes {
-            distances[node as usize] = 0.0;
+            dist_gen[node as usize] = (current_gen, 0.0);
             heap.push(State { cost: 0.0, node });
         }
 
@@ -151,7 +152,8 @@ pub fn prune_unused_roads(graph: &mut RoadGraph, lots: &[BuildingLot]) {
                 break;
             }
 
-            if cost > distances[node as usize] {
+            let cur_dist = dist_gen[node as usize];
+            if cur_dist.0 != current_gen || cost > cur_dist.1 {
                 continue;
             }
 
@@ -174,9 +176,10 @@ pub fn prune_unused_roads(graph: &mut RoadGraph, lots: &[BuildingLot]) {
 
                 let next_cost = cost + weight;
 
-                if next_cost < distances[next_node as usize] {
-                    distances[next_node as usize] = next_cost;
-                    came_from[next_node as usize] = Some((node, edge_id));
+                let nd = &mut dist_gen[next_node as usize];
+                if nd.0 != current_gen || next_cost < nd.1 {
+                    *nd = (current_gen, next_cost);
+                    from_gen[next_node as usize] = (current_gen, Some((node, edge_id)));
                     heap.push(State {
                         cost: next_cost,
                         node: next_node,
@@ -187,7 +190,10 @@ pub fn prune_unused_roads(graph: &mut RoadGraph, lots: &[BuildingLot]) {
 
         if let Some(mut curr) = found_target {
             // Trace back and preserve the path
-            while let Some((prev, edge_id)) = came_from[curr as usize] {
+            while from_gen[curr as usize].0 == current_gen {
+                let Some((prev, edge_id)) = from_gen[curr as usize].1 else {
+                    break;
+                };
                 keep_edges.insert(edge_id);
                 connected_nodes.insert(curr);
                 unreached_essential.remove(&curr);
@@ -224,11 +230,10 @@ pub fn prune_unused_roads(graph: &mut RoadGraph, lots: &[BuildingLot]) {
 
             while !island_remaining.is_empty() {
                 heap.clear();
-                distances.fill(f32::MAX);
-                came_from.fill(None);
+                current_gen += 1;
 
                 for &node in &island_connected {
-                    distances[node as usize] = 0.0;
+                    dist_gen[node as usize] = (current_gen, 0.0);
                     heap.push(State { cost: 0.0, node });
                 }
 
@@ -238,7 +243,8 @@ pub fn prune_unused_roads(graph: &mut RoadGraph, lots: &[BuildingLot]) {
                         found = Some(node);
                         break;
                     }
-                    if cost > distances[node as usize] {
+                    let cur_dist = dist_gen[node as usize];
+                    if cur_dist.0 != current_gen || cost > cur_dist.1 {
                         continue;
                     }
                     for &edge_id in &graph.nodes[node as usize].edges {
@@ -255,9 +261,10 @@ pub fn prune_unused_roads(graph: &mut RoadGraph, lots: &[BuildingLot]) {
                             .position
                             .distance(graph.nodes[next as usize].position);
                         let next_cost = cost + d;
-                        if next_cost < distances[next as usize] {
-                            distances[next as usize] = next_cost;
-                            came_from[next as usize] = Some((node, edge_id));
+                        let nd = &mut dist_gen[next as usize];
+                        if nd.0 != current_gen || next_cost < nd.1 {
+                            *nd = (current_gen, next_cost);
+                            from_gen[next as usize] = (current_gen, Some((node, edge_id)));
                             heap.push(State {
                                 cost: next_cost,
                                 node: next,
@@ -267,7 +274,10 @@ pub fn prune_unused_roads(graph: &mut RoadGraph, lots: &[BuildingLot]) {
                 }
 
                 if let Some(mut curr) = found {
-                    while let Some((prev, edge_id)) = came_from[curr as usize] {
+                    while from_gen[curr as usize].0 == current_gen {
+                        let Some((prev, edge_id)) = from_gen[curr as usize].1 else {
+                            break;
+                        };
                         keep_edges.insert(edge_id);
                         island_connected.insert(curr);
                         island_remaining.remove(&curr);

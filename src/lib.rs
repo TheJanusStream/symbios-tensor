@@ -43,8 +43,8 @@
 //!
 //! // 4. Carve roads and lots into terrain
 //! let mut hm = heightmap;
-//! carve_roads(&graph, &mut hm, 6.0);
-//! carve_lots(&lots, &mut hm, 2.0);
+//! let road_mask = carve_roads(&graph, &mut hm, 6.0);
+//! carve_lots(&lots, &mut hm, 2.0, Some(&road_mask));
 //! ```
 
 pub mod carve;
