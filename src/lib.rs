@@ -9,7 +9,7 @@
 //!
 //! # Pipeline
 //!
-//! 1. **Road generation** — [`generate_roads`] seeds streamlines on a regular
+//! 1. **Road generation** — [`generate_roads`] seeds streamlines on a jittered
 //!    grid and traces them through a [`TensorField`] using RK2 integration,
 //!    snapping and splitting edges to form a planar [`RoadGraph`].
 //! 2. **Block extraction** — [`extract_blocks`] walks the planar graph with a

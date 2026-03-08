@@ -21,6 +21,7 @@ use crate::tensor::TensorField;
 /// Configuration for tensor-field city generation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TensorConfig {
+    /// RNG seed for jittered seed placement.
     pub seed: u64,
     /// World-space distance per integration step.
     pub step_size: f32,

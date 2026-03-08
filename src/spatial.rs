@@ -32,7 +32,7 @@ impl SpatialHash {
 
     /// Creates a new spatial hash covering a `world_width` × `world_depth`
     /// area with cells of the given size. If the resulting grid would exceed
-    /// [`Self::MAX_CELLS`], `cell_size` is automatically increased to fit.
+    /// `MAX_CELLS`, `cell_size` is automatically increased to fit.
     pub fn new(world_width: f32, world_depth: f32, cell_size: f32) -> Self {
         let mut cs = cell_size;
         loop {
