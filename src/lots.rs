@@ -210,8 +210,29 @@ fn split_polygon_by_line(
         }
     }
 
-    if intersections.len() != 2 {
+    if intersections.len() < 2 {
         return None;
+    }
+
+    // For concave polygons the splitting line may intersect >2 edges.
+    // Pick the pair of intersections whose midpoint is closest to the
+    // line origin (centroid), which splits through the polygon's core
+    // rather than clipping an outer lobe.
+    if intersections.len() > 2 {
+        let mut best_pair: Option<(usize, usize)> = None;
+        let mut best_dist = f32::MAX;
+        for i in 0..intersections.len() {
+            for j in (i + 1)..intersections.len() {
+                let mid = (intersections[i].1 + intersections[j].1) * 0.5;
+                let d = mid.distance_squared(line_origin);
+                if d < best_dist {
+                    best_dist = d;
+                    best_pair = Some((i, j));
+                }
+            }
+        }
+        let (i, j) = best_pair.unwrap();
+        intersections = vec![intersections[i], intersections[j]];
     }
 
     intersections.sort_by_key(|(idx, _)| *idx);

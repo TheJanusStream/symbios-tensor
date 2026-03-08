@@ -190,32 +190,35 @@ pub(crate) fn signed_area(nodes: &[NodeId], graph: &RoadGraph) -> f32 {
 
 /// Removes antenna spikes (out-and-back dead-end sequences) from a cycle.
 ///
-/// An antenna appears as `...A → B → ... → B → A...` where the walker
-/// traveled down a dead-end and U-turned back. This collapses each such
-/// spike so the perimeter is a simple polygon.
-///
-/// To avoid accidentally draining the valid block body when the walk
-/// starts inside a dead-end (duplicate at index 0 and near the end),
-/// we always drain the *shorter* span between the two occurrences.
+/// An antenna is a palindromic walk `... A → B → C → B → A ...` where the
+/// walker traveled down a dead-end and U-turned back. This iteratively
+/// collapses consecutive `X → Y → X` tips (treating the array as a circular
+/// buffer) until no tips remain, which correctly peels antennas of any
+/// length regardless of whether the spike or the block body is longer.
 fn strip_antennas(cycle: &mut Vec<NodeId>) {
     loop {
+        if cycle.len() < 3 {
+            break;
+        }
         let mut found = false;
-        'outer: for i in 0..cycle.len() {
-            for j in (i + 1)..cycle.len() {
-                if cycle[i] == cycle[j] {
-                    let spike_len = j - i;
-                    let rest_len = cycle.len() - spike_len;
-                    if spike_len <= rest_len {
-                        // Spike is the shorter span: drain i+1..=j
-                        cycle.drain((i + 1)..=j);
-                    } else {
-                        // Spike wraps around — the valid block is between
-                        // i and j. Keep only that portion.
-                        *cycle = cycle[i..j].to_vec();
-                    }
-                    found = true;
-                    break 'outer;
+        let n = cycle.len();
+        for i in 0..n {
+            let prev = if i == 0 { n - 1 } else { i - 1 };
+            let next = (i + 1) % n;
+            if cycle[prev] == cycle[next] {
+                // Collapse tip: remove both the tip node and one copy of the
+                // shared neighbour. Remove the higher index first to keep
+                // indices stable.
+                if next > i {
+                    cycle.remove(next);
+                    cycle.remove(i);
+                } else {
+                    // next == 0, i == n-1: remove i first (higher), then 0
+                    cycle.remove(i);
+                    cycle.remove(0);
                 }
+                found = true;
+                break;
             }
         }
         if !found {

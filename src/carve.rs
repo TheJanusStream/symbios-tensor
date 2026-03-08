@@ -27,6 +27,18 @@ pub fn carve_lots(
         return;
     }
 
+    if let Some(mask) = road_surface {
+        assert_eq!(
+            mask.len(),
+            hw * hh,
+            "road_surface mask length ({}) must match heightmap dimensions ({}x{} = {})",
+            mask.len(),
+            hw,
+            hh,
+            hw * hh,
+        );
+    }
+
     for lot in lots {
         // 1. Determine the target foundation height (e.g., sample the center)
         let target_h = heightmap.get_height_at(lot.position.x, lot.position.y);
