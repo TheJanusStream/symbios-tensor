@@ -151,7 +151,7 @@ fn extract_lots_produces_buildings() {
     graph.add_edge(n3, n0, RoadType::Minor);
     // CW winding (negative signed area) matches extract_blocks convention
     graph.blocks.push(CityBlock {
-        perimeter: vec![n0, n1, n2, n3],
+        perimeter: vec![n0, n3, n2, n1],
     });
 
     // Heightmap large enough to cover the block, no water

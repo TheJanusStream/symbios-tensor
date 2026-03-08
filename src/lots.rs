@@ -388,13 +388,9 @@ fn inscribed_box(poly: &[Vec2], frontage_idx: usize) -> Option<(Vec2, f32, f32, 
     let fb = poly[(frontage_idx + 1) % n];
 
     let street_dir = (fb - fa).normalize();
-    let mut inward_dir = Vec2::new(-street_dir.y, street_dir.x);
-
-    // Ensure inward points toward polygon interior
-    let centroid = polygon_centroid(poly);
-    if (centroid - fa).dot(inward_dir) < 0.0 {
-        inward_dir = -inward_dir;
-    }
+    // Blocks from extract_blocks() have guaranteed CW winding, so the
+    // interior is always to the right of each edge direction.
+    let inward_dir = Vec2::new(street_dir.y, -street_dir.x);
 
     let rotation = street_dir.y.atan2(street_dir.x);
     let width = (fb - fa).length();
@@ -591,11 +587,12 @@ mod tests {
 
     #[test]
     fn inscribed_box_rectangle() {
+        // CW winding — matches extract_blocks() output
         let rect = vec![
             Vec2::new(0.0, 0.0),
-            Vec2::new(10.0, 0.0),
-            Vec2::new(10.0, 5.0),
             Vec2::new(0.0, 5.0),
+            Vec2::new(10.0, 5.0),
+            Vec2::new(10.0, 0.0),
         ];
         let (frontage_idx, _) = find_frontage(&rect, &rect);
         let result = inscribed_box(&rect, frontage_idx);

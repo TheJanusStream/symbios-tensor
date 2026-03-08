@@ -104,8 +104,10 @@ pub fn prune_unused_roads(graph: &mut RoadGraph, lots: &[BuildingLot]) {
             let comp_id = comp_ids[edge.start as usize];
             let comp_size = comp_sizes[&comp_id];
 
-            // Ignore isolated floating lines if a real network exists
-            let penalty = if comp_size < 10 && max_comp_size > 20 {
+            // Penalise only truly degenerate fragments (≤2 nodes can't
+            // form a usable road loop). Small but valid island communities
+            // (e.g. 5-9 nodes) should keep their lots.
+            let penalty = if comp_size < 3 && max_comp_size > 20 {
                 1000.0
             } else {
                 0.0
@@ -223,14 +225,11 @@ pub fn prune_unused_roads(graph: &mut RoadGraph, lots: &[BuildingLot]) {
             // edges, run a local Steiner tree within the island: seed
             // from the unreached essential nodes on this component and
             // connect them through existing active edges.
+            let target_comp = comp_ids[*unreached_essential.iter().next().unwrap() as usize];
             let island_seed: Vec<NodeId> = unreached_essential
                 .iter()
                 .copied()
-                .filter(|&n| {
-                    // Find nodes in same component as the first unreached
-                    comp_ids[n as usize]
-                        == comp_ids[*unreached_essential.iter().next().unwrap() as usize]
-                })
+                .filter(|&n| comp_ids[n as usize] == target_comp)
                 .collect();
 
             if island_seed.is_empty() {

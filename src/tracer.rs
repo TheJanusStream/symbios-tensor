@@ -155,7 +155,10 @@ pub fn generate_roads(heightmap: &HeightMap, config: &TensorConfig) -> RoadGraph
     // --- Trace each seed ---
     let bounds = Vec2::new(world_w, world_d);
     // Cap total traces to prevent runaway branching in circular tensor flows.
-    let max_traces = active.len() * 50;
+    // Use the larger of seed-proportional and area-proportional limits so that
+    // sparse seeds on large maps don't prematurely abort city growth.
+    let area_based = ((world_w * world_d) / config.minor_road_dist) as usize;
+    let max_traces = (active.len() * 50).max(area_based);
     let mut trace_count = 0_usize;
     while let Some(seed) = active.pop_front() {
         trace_count += 1;
