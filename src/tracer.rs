@@ -91,30 +91,30 @@ pub fn generate_roads(
     heightmap: &HeightMap,
     config: &TensorConfig,
 ) -> Result<RoadGraph, TensorError> {
-    if config.step_size <= 0.0 {
+    if !config.step_size.is_finite() || config.step_size <= 0.0 {
         return Err(TensorError {
-            message: format!("step_size must be positive, got {}", config.step_size),
+            message: format!("step_size must be finite and positive, got {}", config.step_size),
         });
     }
-    if config.major_road_dist <= 0.0 {
+    if !config.major_road_dist.is_finite() || config.major_road_dist <= 0.0 {
         return Err(TensorError {
             message: format!(
-                "major_road_dist must be positive, got {}",
+                "major_road_dist must be finite and positive, got {}",
                 config.major_road_dist
             ),
         });
     }
-    if config.minor_road_dist <= 0.0 {
+    if !config.minor_road_dist.is_finite() || config.minor_road_dist <= 0.0 {
         return Err(TensorError {
             message: format!(
-                "minor_road_dist must be positive, got {}",
+                "minor_road_dist must be finite and positive, got {}",
                 config.minor_road_dist
             ),
         });
     }
-    if config.snap_radius <= 0.0 {
+    if !config.snap_radius.is_finite() || config.snap_radius <= 0.0 {
         return Err(TensorError {
-            message: format!("snap_radius must be positive, got {}", config.snap_radius),
+            message: format!("snap_radius must be finite and positive, got {}", config.snap_radius),
         });
     }
 
@@ -285,8 +285,30 @@ fn trace_streamline(
                     });
                 if !already_connected {
                     let n_pos = graph.node_pos(n_id);
-                    let edge_id = graph.add_edge(current_node, n_id, seed.road_type);
-                    spatial.insert_edge(edge_id, current_pos, n_pos);
+
+                    // The snapped endpoint may differ from the proposed
+                    // position, rotating the committed segment so it crosses
+                    // an edge the original ray missed. Re-check the adjusted
+                    // trajectory for crossings to maintain planarity.
+                    let crossing = find_crossing(graph, spatial, current_pos, n_pos, current_node);
+                    if let Some((cross_eid, cross_pt)) = crossing {
+                        let ce = &graph.edges[cross_eid as usize];
+                        let ce_start = graph.node_pos(ce.start);
+                        let ce_end = graph.node_pos(ce.end);
+
+                        let (mid_node, ea, eb) = graph.split_edge(cross_eid, cross_pt);
+                        spatial.remove_edge(cross_eid, ce_start, ce_end);
+                        spatial.insert_node(mid_node, cross_pt);
+                        spatial.insert_edge(ea, ce_start, cross_pt);
+                        spatial.insert_edge(eb, cross_pt, ce_end);
+
+                        let connecting =
+                            graph.add_edge(current_node, mid_node, seed.road_type);
+                        spatial.insert_edge(connecting, current_pos, cross_pt);
+                    } else {
+                        let edge_id = graph.add_edge(current_node, n_id, seed.road_type);
+                        spatial.insert_edge(edge_id, current_pos, n_pos);
+                    }
                 }
                 break;
             }
@@ -295,10 +317,12 @@ fn trace_streamline(
                 intersection_pos,
             } => {
                 let split_edge = &graph.edges[edge_id as usize];
-                let edge_dir = (graph.node_pos(split_edge.end) - graph.node_pos(split_edge.start))
-                    .normalize_or_zero();
+                let old_start_pos_pre = graph.node_pos(split_edge.start);
+                let old_end_pos_pre = graph.node_pos(split_edge.end);
+                let edge_dir = (old_end_pos_pre - old_start_pos_pre).normalize_or_zero();
 
                 let (mid_node, ea, eb) = graph.split_edge(edge_id, intersection_pos);
+                spatial.remove_edge(edge_id, old_start_pos_pre, old_end_pos_pre);
                 spatial.insert_node(mid_node, intersection_pos);
 
                 let old_start_pos = graph.node_pos(graph.edges[ea as usize].start);
@@ -357,4 +381,40 @@ fn trace_streamline(
             }
         }
     }
+}
+
+/// Checks whether the segment `from -> to` crosses any active edge not
+/// incident to `from_node`. Returns the closest crossing if one exists.
+fn find_crossing(
+    graph: &RoadGraph,
+    spatial: &SpatialHash,
+    from: Vec2,
+    to: Vec2,
+    from_node: u32,
+) -> Option<(u32, Vec2)> {
+    use crate::geometry::segment_intersection;
+
+    let edge_ids = spatial.edges_in_region(from, to, 0.0);
+    let mut best: Option<(u32, Vec2)> = None;
+    let mut best_dist = f32::MAX;
+
+    for e_id in edge_ids {
+        let edge = &graph.edges[e_id as usize];
+        if !edge.active {
+            continue;
+        }
+        if edge.start == from_node || edge.end == from_node {
+            continue;
+        }
+        let e_start = graph.nodes[edge.start as usize].position;
+        let e_end = graph.nodes[edge.end as usize].position;
+        if let Some(pt) = segment_intersection(from, to, e_start, e_end) {
+            let d = from.distance_squared(pt);
+            if d < best_dist {
+                best_dist = d;
+                best = Some((e_id, pt));
+            }
+        }
+    }
+    best
 }

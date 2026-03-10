@@ -536,7 +536,7 @@ fn apply_setbacks(
     // Shift center inward by (front - rear) / 2 to account for asymmetric setbacks
     let street_dir = Vec2::new(rotation.cos(), rotation.sin());
     let inward_dir = Vec2::new(-street_dir.y, street_dir.x);
-    let depth_shift = (config.front_setback - config.rear_setback) * 0.5;
+    let depth_shift = (config.front_setback.max(0.0) - config.rear_setback.max(0.0)) * 0.5;
     let adjusted_center = center + inward_dir * depth_shift;
 
     Some(BuildingLot {

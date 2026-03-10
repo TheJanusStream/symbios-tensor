@@ -68,6 +68,23 @@ impl SpatialHash {
         }
     }
 
+    /// Removes an edge from every cell it was registered in.
+    pub fn remove_edge(&mut self, id: EdgeId, start: Vec2, end: Vec2) {
+        let min_col = ((start.x.min(end.x) / self.cell_size).floor() as isize).max(0);
+        let max_col =
+            ((start.x.max(end.x) / self.cell_size).floor() as isize).min(self.cols as isize - 1);
+        let min_row = ((start.y.min(end.y) / self.cell_size).floor() as isize).max(0);
+        let max_row =
+            ((start.y.max(end.y) / self.cell_size).floor() as isize).min(self.rows as isize - 1);
+
+        for r in min_row..=max_row {
+            for c in min_col..=max_col {
+                let idx = r as usize * self.cols + c as usize;
+                self.cells[idx].edges.retain(|&e| e != id);
+            }
+        }
+    }
+
     /// Registers an edge in every cell its axis-aligned bounding box overlaps.
     pub fn insert_edge(&mut self, id: EdgeId, start: Vec2, end: Vec2) {
         let min_col = ((start.x.min(end.x) / self.cell_size).floor() as isize).max(0);
@@ -83,6 +100,20 @@ impl SpatialHash {
                 self.cells[idx].edges.push(id);
             }
         }
+    }
+
+    /// Returns deduplicated edge IDs from all cells overlapping the region.
+    pub(crate) fn edges_in_region(&self, start: Vec2, end: Vec2, padding: f32) -> Vec<EdgeId> {
+        let cells = self.cells_for_region(start, end, padding);
+        let mut ids = Vec::new();
+        for cell in &cells {
+            for &eid in &cell.edges {
+                if !ids.contains(&eid) {
+                    ids.push(eid);
+                }
+            }
+        }
+        ids
     }
 
     /// Collects all unique cells whose bounding box overlaps `[start, end]` expanded by `padding`.
