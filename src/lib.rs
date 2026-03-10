@@ -16,9 +16,9 @@
 //!    minimum-angle (left-most turn) algorithm, producing closed [`CityBlock`]
 //!    polygons for every bounded interior face.
 //! 3. **Lot subdivision** — [`extract_lots`] recursively splits each block
-//!    along its longest edge until pieces are below a configurable area
-//!    threshold, then computes a street-aligned [`BuildingLot`] rectangle with
-//!    front/side/rear setbacks.
+//!    perpendicular to its longest edge (through the centroid) until pieces
+//!    are below a configurable area threshold, then computes a street-aligned
+//!    [`BuildingLot`] rectangle with front/side/rear setbacks.
 //! 4. **Terrain carving** — [`carve_roads`] and [`carve_lots`] flatten the
 //!    heightmap under roads and building foundations with smooth embankment
 //!    blending at the edges. Both accept a configurable `blend_radius` that

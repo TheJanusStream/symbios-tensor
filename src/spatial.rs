@@ -151,8 +151,8 @@ pub enum TraceResult {
 /// Evaluates a single trace step `start_pos` → `proposed_pos` against the graph.
 ///
 /// Resolution order:
-/// 1. **Node snap** — did we land close to an existing intersection?
-/// 2. **Edge crossing** — did our path physically cross an existing road?
+/// 1. **Edge crossing** — did our path physically cross an existing road?
+/// 2. **Node snap** — did we land close to an existing intersection?
 /// 3. **Edge proximity (T-junction)** — did we land near the side of a road?
 pub fn resolve_trace_step(
     graph: &RoadGraph,

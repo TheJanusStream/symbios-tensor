@@ -21,16 +21,19 @@ field falls back to an axis-aligned Manhattan grid.
    interior face as a `CityBlock` polygon. The unbounded exterior face is
    filtered out by winding direction.
 
-3. **Lot subdivision** (`extract_lots`) — Recursively splits each block along
-   its longest edge until sub-polygons fall below a configurable area
-   threshold. A street-aligned inscribed rectangle is computed for each piece,
-   with front/side/rear setbacks applied to produce `BuildingLot` footprints.
+3. **Lot subdivision** (`extract_lots`) — Recursively splits each block
+   perpendicular to its longest edge (through the centroid) until sub-polygons
+   fall below a configurable area threshold. A street-aligned inscribed
+   rectangle is computed for each piece, with front/side/rear setbacks applied
+   to produce `BuildingLot` footprints.
 
 4. **Terrain carving** (`carve_roads`, `carve_lots`) — Flattens the heightmap
    under roads and building foundations with smooth embankment blending at the
-   edges. Both functions accept a configurable `blend_radius` that controls
-   how far the embankment zone extends beyond the surface — larger values
-   produce wider, gentler slopes on steep terrain. `carve_roads` returns a
+   edges. `carve_roads` takes a `road_width` (total width of the flat road
+   surface) and a `blend_radius` that controls how far the embankment zone
+   extends beyond the road edge — larger values produce wider, gentler slopes
+   on steep terrain. `carve_lots` similarly accepts a `blend_radius` for
+   foundation embankments. `carve_roads` returns a
    boolean road-surface mask so that `carve_lots` can avoid overwriting
    already-flattened pavement. A two-pass road carving approach prevents
    embankments from overwriting previously flattened pavement at intersections.
@@ -50,7 +53,7 @@ let heightmap = HeightMap::new(128, 128, 4.0);
 let config = TensorConfig::default();
 
 // 1. Generate road network
-let mut graph = generate_roads(&heightmap, &config);
+let mut graph = generate_roads(&heightmap, &config).expect("invalid config");
 
 // 2. Extract city blocks
 extract_blocks(&mut graph);

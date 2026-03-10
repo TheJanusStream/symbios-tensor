@@ -34,7 +34,11 @@ pub struct RoadNode {
     pub edges: Vec<EdgeId>,
 }
 
-/// A directed road segment connecting two nodes.
+/// An undirected road segment connecting two nodes.
+///
+/// Although stored with [`start`](Self::start) and [`end`](Self::end) fields,
+/// edges are traversed bidirectionally — both endpoints list the edge in their
+/// adjacency lists.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoadEdge {
     /// Source node index.

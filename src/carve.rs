@@ -109,9 +109,15 @@ pub fn carve_lots(
 /// Flattens the heightmap along road edges, creating smooth graded surfaces
 /// where roads are placed, with blended embankments at the edges.
 ///
+/// `road_width` is the total width of the flat road surface (cells within
+/// half this distance from the edge centerline are flattened).
 /// `blend_radius` controls how far the embankment zone extends beyond the
 /// road surface. Larger values produce wider, gentler slopes — useful on
 /// steep terrain where an abrupt one-cell transition would look unnatural.
+///
+/// Returns a boolean mask (`Vec<bool>`, one entry per heightmap cell) marking
+/// cells that are part of a road surface. Pass this to [`carve_lots`] to
+/// prevent building foundations from overwriting road pavement.
 ///
 /// Uses a two-pass approach: first all road surfaces are flattened, then
 /// embankments are blended. This prevents later embankments from overwriting

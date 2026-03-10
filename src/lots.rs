@@ -1,8 +1,9 @@
 //! Building lot extraction from city blocks.
 //!
 //! Each [`CityBlock`](crate::graph::CityBlock) polygon is recursively split
-//! along its longest edge until sub-polygons fall below a configurable area
-//! threshold. A street-aligned inscribed rectangle is then computed for each
+//! perpendicular to its longest edge (through the centroid) until sub-polygons
+//! fall below a configurable area threshold. A street-aligned inscribed
+//! rectangle is then computed for each
 //! piece, with front/side/rear setbacks applied to produce the final
 //! [`BuildingLot`] footprint.
 
