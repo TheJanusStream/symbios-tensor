@@ -11,7 +11,7 @@ use crate::geometry::closest_point_on_segment;
 use crate::graph::{EdgeId, NodeId, RoadGraph, RoadType};
 use crate::lots::BuildingLot;
 use std::cmp::Ordering;
-use std::collections::{BinaryHeap, HashMap, HashSet};
+use std::collections::{BTreeSet, BinaryHeap, HashMap, HashSet};
 
 #[derive(Copy, Clone, PartialEq)]
 struct State {
@@ -86,7 +86,7 @@ pub fn prune_unused_roads(graph: &mut RoadGraph, lots: &[BuildingLot]) {
 
     // --- PHASE 1: Identify Lot Access ---
     let mut essential_edges = HashSet::new();
-    let mut essential_nodes = HashSet::new();
+    let mut essential_nodes = BTreeSet::new();
 
     for lot in lots {
         let mut best_edge = None;
@@ -131,7 +131,7 @@ pub fn prune_unused_roads(graph: &mut RoadGraph, lots: &[BuildingLot]) {
 
     // --- PHASE 2: The Steiner Tree ---
     let mut keep_edges = essential_edges.clone();
-    let mut connected_nodes = HashSet::new();
+    let mut connected_nodes = BTreeSet::new();
 
     // CRITICAL FIX: Track exactly which essential nodes we still need to reach
     let mut unreached_essential = essential_nodes.clone();
@@ -238,9 +238,9 @@ pub fn prune_unused_roads(graph: &mut RoadGraph, lots: &[BuildingLot]) {
 
             // BFS/Dijkstra within the island to connect its essential nodes
             let island_comp = comp_ids[island_seed[0] as usize];
-            let mut island_connected: HashSet<NodeId> = HashSet::new();
+            let mut island_connected: BTreeSet<NodeId> = BTreeSet::new();
             island_connected.insert(island_seed[0]);
-            let mut island_remaining: HashSet<NodeId> = island_seed.iter().copied().collect();
+            let mut island_remaining: BTreeSet<NodeId> = island_seed.iter().copied().collect();
             island_remaining.remove(&island_seed[0]);
 
             while !island_remaining.is_empty() {

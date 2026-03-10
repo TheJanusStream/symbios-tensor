@@ -250,8 +250,13 @@ fn trace_streamline(
         dir = k2;
         let proposed = current_pos + dir * config.step_size;
 
-        // Bounds check
-        if proposed.x < 0.0 || proposed.x >= bounds.x || proposed.y < 0.0 || proposed.y >= bounds.y
+        // Bounds check (NaN coordinates fail is_finite and abort the trace)
+        if !proposed.x.is_finite()
+            || !proposed.y.is_finite()
+            || proposed.x < 0.0
+            || proposed.x >= bounds.x
+            || proposed.y < 0.0
+            || proposed.y >= bounds.y
         {
             break;
         }

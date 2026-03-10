@@ -34,6 +34,14 @@ impl SpatialHash {
     /// area with cells of the given size. If the resulting grid would exceed
     /// `MAX_CELLS`, `cell_size` is automatically increased to fit.
     pub fn new(world_width: f32, world_depth: f32, cell_size: f32) -> Self {
+        assert!(
+            world_width.is_finite() && world_depth.is_finite() && cell_size.is_finite(),
+            "SpatialHash dimensions must be finite (got {world_width} x {world_depth}, cell {cell_size})"
+        );
+        assert!(
+            world_width > 0.0 && world_depth > 0.0 && cell_size > 0.0,
+            "SpatialHash dimensions must be positive (got {world_width} x {world_depth}, cell {cell_size})"
+        );
         let mut cs = cell_size;
         loop {
             let cols = (world_width / cs).ceil() as usize;
@@ -284,12 +292,9 @@ pub fn resolve_trace_step(
             let proj = closest_point_on_segment(proposed_pos, e_start, e_end);
             let dist_to_edge_sq = proposed_pos.distance_squared(proj);
 
-            if dist_to_edge_sq < snap_sq {
-                let dist = start_pos.distance_squared(proj);
-                if dist < closest_edge_dist {
-                    closest_edge_dist = dist;
-                    closest_edge_hit = Some((e_id, proj));
-                }
+            if dist_to_edge_sq < snap_sq && dist_to_edge_sq < closest_edge_dist {
+                closest_edge_dist = dist_to_edge_sq;
+                closest_edge_hit = Some((e_id, proj));
             }
         }
     }
