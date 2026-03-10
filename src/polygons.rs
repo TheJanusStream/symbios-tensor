@@ -40,18 +40,6 @@ pub fn extract_blocks(graph: &mut RoadGraph) {
         adjacency[from as usize].push((to, eid));
     }
 
-    // Sort each adjacency list by the angle of the outgoing direction
-    for (nid, neighbours) in adjacency.iter_mut().enumerate() {
-        let origin = graph.nodes[nid].position;
-        neighbours.sort_by(|a, b| {
-            let da = graph.nodes[a.0 as usize].position - origin;
-            let db = graph.nodes[b.0 as usize].position - origin;
-            let angle_a = da.y.atan2(da.x);
-            let angle_b = db.y.atan2(db.x);
-            angle_a.partial_cmp(&angle_b).unwrap()
-        });
-    }
-
     // Walk minimal cycles using left-most turn
     for &(start_from, start_to, _) in &directed {
         if visited_half_edges.contains(&(start_from, start_to)) {

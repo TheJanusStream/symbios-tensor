@@ -290,7 +290,7 @@ fn trace_streamline(
                     // position, rotating the committed segment so it crosses
                     // an edge the original ray missed. Re-check the adjusted
                     // trajectory for crossings to maintain planarity.
-                    let crossing = find_crossing(graph, spatial, current_pos, n_pos, current_node);
+                    let crossing = find_crossing(graph, spatial, current_pos, n_pos, current_node, n_id);
                     if let Some((cross_eid, cross_pt)) = crossing {
                         let ce = &graph.edges[cross_eid as usize];
                         let ce_start = graph.node_pos(ce.start);
@@ -384,13 +384,15 @@ fn trace_streamline(
 }
 
 /// Checks whether the segment `from -> to` crosses any active edge not
-/// incident to `from_node`. Returns the closest crossing if one exists.
+/// incident to `from_node` or `to_node`. Returns the closest crossing if
+/// one exists.
 fn find_crossing(
     graph: &RoadGraph,
     spatial: &SpatialHash,
     from: Vec2,
     to: Vec2,
     from_node: u32,
+    to_node: u32,
 ) -> Option<(u32, Vec2)> {
     use crate::geometry::segment_intersection;
 
@@ -404,6 +406,9 @@ fn find_crossing(
             continue;
         }
         if edge.start == from_node || edge.end == from_node {
+            continue;
+        }
+        if edge.start == to_node || edge.end == to_node {
             continue;
         }
         let e_start = graph.nodes[edge.start as usize].position;

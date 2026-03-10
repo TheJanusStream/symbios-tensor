@@ -421,7 +421,8 @@ fn point_on_segment(p: Vec2, a: Vec2, b: Vec2) -> bool {
         return p.distance(a) < POINT_ON_SEG_TOLERANCE;
     }
     let t = (p - a).dot(ab) / len_sq;
-    if !(-POINT_ON_SEG_TOLERANCE..=1.0 + POINT_ON_SEG_TOLERANCE).contains(&t) {
+    let t_tol = POINT_ON_SEG_TOLERANCE / len_sq.sqrt();
+    if !(-t_tol..=1.0 + t_tol).contains(&t) {
         return false;
     }
     let proj = a + ab * t.clamp(0.0, 1.0);
@@ -536,7 +537,7 @@ fn apply_setbacks(
 
     // Shift center inward by (front - rear) / 2 to account for asymmetric setbacks
     let street_dir = Vec2::new(rotation.cos(), rotation.sin());
-    let inward_dir = Vec2::new(-street_dir.y, street_dir.x);
+    let inward_dir = Vec2::new(street_dir.y, -street_dir.x);
     let depth_shift = (config.front_setback.max(0.0) - config.rear_setback.max(0.0)) * 0.5;
     let adjusted_center = center + inward_dir * depth_shift;
 
