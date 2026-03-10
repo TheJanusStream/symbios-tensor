@@ -455,14 +455,36 @@ fn inscribed_box(poly: &[Vec2], frontage_idx: usize) -> Option<(Vec2, f32, f32, 
     }
     let ray_extent = (max_pt - min_pt).length() + 1.0;
 
-    // Cast rays inward from several points along the frontage edge to find
-    // the minimum depth before hitting the opposite polygon boundary.
-    let num_samples = 7;
+    // Cast rays inward from points along the frontage edge to find the
+    // minimum depth before hitting the opposite polygon boundary.
+    //
+    // We use uniform samples PLUS projections of every polygon vertex onto
+    // the frontage line so that vertex-induced notches are never missed.
+    let num_uniform = 7;
+    let mut sample_ts: Vec<f32> = (0..=num_uniform)
+        .map(|i| i as f32 / num_uniform as f32)
+        .collect();
+
+    // Project each non-frontage vertex onto the frontage line and add its
+    // parametric position if it falls within the edge span.
+    let frontage_vec = fb - fa;
+    let frontage_len_sq = frontage_vec.length_squared();
+    if frontage_len_sq > DEGENERATE_SEG_LEN_SQ {
+        for (k, &vertex) in poly.iter().enumerate() {
+            if k == frontage_idx || k == (frontage_idx + 1) % n {
+                continue;
+            }
+            let t = (vertex - fa).dot(frontage_vec) / frontage_len_sq;
+            if (0.0..=1.0).contains(&t) {
+                sample_ts.push(t);
+            }
+        }
+    }
+
     let mut min_depth = f32::MAX;
 
-    for i in 0..=num_samples {
-        let t = i as f32 / num_samples as f32;
-        let ray_origin = fa.lerp(fb, t);
+    for t in &sample_ts {
+        let ray_origin = fa.lerp(fb, *t);
         let ray_end = ray_origin + inward_dir * ray_extent;
 
         let mut closest_dist = f32::MAX;
@@ -680,6 +702,32 @@ mod tests {
         // Width 5 - 2*1.5 = 2 < 6 → filtered
         let result = apply_setbacks(Vec2::ZERO, Vec2::ZERO, 0.0, 5.0, 20.0, &config);
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn inscribed_box_notched_polygon() {
+        // A polygon with an inward notch between uniform sample points.
+        // The notch vertex at (5, 2) should limit depth to 2, not the
+        // far edge at y=5. Without vertex-projection sampling, uniform
+        // rays could miss this notch entirely.
+        //
+        // CW winding: frontage along bottom edge (y=0), interior upward.
+        let poly = vec![
+            Vec2::new(0.0, 0.0),   // 0 — frontage start
+            Vec2::new(0.0, 5.0),   // 1
+            Vec2::new(5.0, 2.0),   // 2 — notch vertex
+            Vec2::new(10.0, 5.0),  // 3
+            Vec2::new(10.0, 0.0),  // 4 — frontage end
+        ];
+        let frontage_idx = 4; // edge 4→0: (10,0)→(0,0)
+        let result = inscribed_box(&poly, frontage_idx);
+        assert!(result.is_some());
+        let (_center, _rotation, _width, depth) = result.unwrap();
+        // Depth must be ≤ 2.0 (the notch), not ~5.0 (the far edges).
+        assert!(
+            depth <= 2.1,
+            "depth should be clamped by notch vertex at y=2, got {depth}"
+        );
     }
 
     #[test]
