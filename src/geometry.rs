@@ -2,11 +2,17 @@
 
 use glam::Vec2;
 
+/// Epsilon for treating a segment as degenerate (length² below this).
+const DEGENERATE_LEN_SQ: f32 = 1e-6;
+
+/// Epsilon for treating two lines as parallel (cross-product below this).
+const PARALLEL_EPS: f32 = 1e-6;
+
 /// Returns the closest point on segment `a`–`b` to point `p`.
 pub fn closest_point_on_segment(p: Vec2, a: Vec2, b: Vec2) -> Vec2 {
     let ab = b - a;
     let len_sq = ab.length_squared();
-    if len_sq < 1e-6 {
+    if len_sq < DEGENERATE_LEN_SQ {
         return a;
     }
     let t = ((p - a).dot(ab) / len_sq).clamp(0.0, 1.0);
@@ -19,7 +25,7 @@ pub fn segment_intersection(a1: Vec2, a2: Vec2, b1: Vec2, b2: Vec2) -> Option<Ve
     let s2 = b2 - b1;
 
     let denom = -s2.x * s1.y + s1.x * s2.y;
-    if denom.abs() < 1e-6 {
+    if denom.abs() < PARALLEL_EPS {
         return None;
     }
 

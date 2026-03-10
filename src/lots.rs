@@ -13,6 +13,26 @@ use symbios_ground::HeightMap;
 use crate::geometry::segment_intersection;
 use crate::graph::RoadGraph;
 
+/// Minimum distance between consecutive polygon vertices after splitting.
+const DEDUP_TOLERANCE: f32 = 1e-4;
+
+/// Epsilon for detecting degenerate zero-area centroids.
+const CENTROID_AREA_EPS: f32 = 1e-8;
+
+/// Epsilon for degenerate zero-length segments in point-on-segment tests.
+const DEGENERATE_SEG_LEN_SQ: f32 = 1e-10;
+
+/// Tolerance for point-on-segment proximity checks (world units).
+const POINT_ON_SEG_TOLERANCE: f32 = 1e-3;
+
+/// Minimum positive ray hit distance to avoid self-intersection artifacts.
+const RAY_HIT_EPS: f32 = 1e-4;
+
+/// Maximum bounding-box aspect ratio for polygon subdivision. Polygons
+/// whose OBB is more skewed than this are treated as degenerate slivers
+/// and skipped to avoid wasting cycles on recursive splitting.
+const MAX_SUBDIVISION_ASPECT_RATIO: f32 = 20.0;
+
 /// Configuration for lot subdivision and building footprint extraction.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LotConfig {
@@ -155,7 +175,7 @@ fn polygon_centroid(vertices: &[Vec2]) -> Vec2 {
         cy += (a.y + b.y) * cross;
         signed_area_2 += cross;
     }
-    if signed_area_2.abs() < 1e-8 {
+    if signed_area_2.abs() < CENTROID_AREA_EPS {
         return vertices.iter().copied().sum::<Vec2>() / n as f32;
     }
     let inv = 1.0 / (3.0 * signed_area_2);
@@ -180,11 +200,11 @@ fn longest_edge_index(vertices: &[Vec2]) -> usize {
 // Polygon splitting
 // ---------------------------------------------------------------------------
 
-/// Removes consecutive vertices that are closer than 1e-4 apart.
+/// Removes consecutive vertices that are closer than [`DEDUP_TOLERANCE`] apart.
 fn dedup_consecutive(poly: &mut Vec<Vec2>) {
-    poly.dedup_by(|a, b| a.distance(*b) < 1e-4);
+    poly.dedup_by(|a, b| a.distance(*b) < DEDUP_TOLERANCE);
     // Also check wrap-around (last vs first)
-    if poly.len() > 1 && poly.first().unwrap().distance(*poly.last().unwrap()) < 1e-4 {
+    if poly.len() > 1 && poly.first().unwrap().distance(*poly.last().unwrap()) < DEDUP_TOLERANCE {
         poly.pop();
     }
 }
@@ -195,7 +215,16 @@ fn split_polygon_by_line(
     line_dir: Vec2,
 ) -> Option<(Vec<Vec2>, Vec<Vec2>)> {
     let n = poly.len();
-    let half_extent = 100_000.0;
+    // Compute half-extent from the polygon's bounding box diagonal so the
+    // splitting line is always long enough to cross the polygon, without
+    // relying on a hardcoded constant that could cause floating-point issues
+    // on very large or very small maps.
+    let (mut min_pt, mut max_pt) = (poly[0], poly[0]);
+    for &v in &poly[1..] {
+        min_pt = min_pt.min(v);
+        max_pt = max_pt.max(v);
+    }
+    let half_extent = (max_pt - min_pt).length() + 1.0;
     let line_a = line_origin - line_dir * half_extent;
     let line_b = line_origin + line_dir * half_extent;
 
@@ -203,7 +232,9 @@ fn split_polygon_by_line(
     for i in 0..n {
         let j = (i + 1) % n;
         if let Some(pt) = segment_intersection(line_a, line_b, poly[i], poly[j]) {
-            let dominated = intersections.iter().any(|(_, p)| p.distance(pt) < 1e-4);
+            let dominated = intersections
+                .iter()
+                .any(|(_, p)| p.distance(pt) < DEDUP_TOLERANCE);
             if !dominated {
                 intersections.push((i, pt));
             }
@@ -281,6 +312,24 @@ fn subdivide_polygon(
     let area = polygon_area(poly);
 
     if area <= max_area || area <= min_area * 2.0 || depth_limit == 0 {
+        return vec![poly.to_vec()];
+    }
+
+    // Early-exit for degenerate slivers: if the polygon's axis-aligned
+    // bounding box is excessively skewed, further subdivision will only
+    // waste cycles producing sub-threshold fragments.
+    let (mut bb_min, mut bb_max) = (poly[0], poly[0]);
+    for &v in &poly[1..] {
+        bb_min = bb_min.min(v);
+        bb_max = bb_max.max(v);
+    }
+    let extent = bb_max - bb_min;
+    let (short, long) = if extent.x < extent.y {
+        (extent.x, extent.y)
+    } else {
+        (extent.y, extent.x)
+    };
+    if short > 0.0 && long / short > MAX_SUBDIVISION_ASPECT_RATIO {
         return vec![poly.to_vec()];
     }
 
@@ -367,15 +416,15 @@ fn edge_on_perimeter(a: Vec2, b: Vec2, perimeter: &[Vec2]) -> bool {
 fn point_on_segment(p: Vec2, a: Vec2, b: Vec2) -> bool {
     let ab = b - a;
     let len_sq = ab.length_squared();
-    if len_sq < 1e-10 {
-        return p.distance(a) < 1e-3;
+    if len_sq < DEGENERATE_SEG_LEN_SQ {
+        return p.distance(a) < POINT_ON_SEG_TOLERANCE;
     }
     let t = (p - a).dot(ab) / len_sq;
-    if !(-1e-3..=1.0 + 1e-3).contains(&t) {
+    if !(-POINT_ON_SEG_TOLERANCE..=1.0 + POINT_ON_SEG_TOLERANCE).contains(&t) {
         return false;
     }
     let proj = a + ab * t.clamp(0.0, 1.0);
-    p.distance(proj) < 1e-3
+    p.distance(proj) < POINT_ON_SEG_TOLERANCE
 }
 
 fn inscribed_box(poly: &[Vec2], frontage_idx: usize) -> Option<(Vec2, f32, f32, f32)> {
@@ -395,6 +444,15 @@ fn inscribed_box(poly: &[Vec2], frontage_idx: usize) -> Option<(Vec2, f32, f32, 
     let rotation = street_dir.y.atan2(street_dir.x);
     let width = (fb - fa).length();
 
+    // Compute ray extent from polygon bounding box so rays always reach
+    // the far side without relying on a hardcoded constant.
+    let (mut min_pt, mut max_pt) = (poly[0], poly[0]);
+    for &v in &poly[1..] {
+        min_pt = min_pt.min(v);
+        max_pt = max_pt.max(v);
+    }
+    let ray_extent = (max_pt - min_pt).length() + 1.0;
+
     // Cast rays inward from several points along the frontage edge to find
     // the minimum depth before hitting the opposite polygon boundary.
     let num_samples = 7;
@@ -403,7 +461,7 @@ fn inscribed_box(poly: &[Vec2], frontage_idx: usize) -> Option<(Vec2, f32, f32, 
     for i in 0..=num_samples {
         let t = i as f32 / num_samples as f32;
         let ray_origin = fa.lerp(fb, t);
-        let ray_end = ray_origin + inward_dir * 10_000.0;
+        let ray_end = ray_origin + inward_dir * ray_extent;
 
         let mut closest_dist = f32::MAX;
         for j in 0..n {
@@ -414,7 +472,7 @@ fn inscribed_box(poly: &[Vec2], frontage_idx: usize) -> Option<(Vec2, f32, f32, 
             let eb = poly[(j + 1) % n];
             if let Some(hit) = segment_intersection(ray_origin, ray_end, ea, eb) {
                 let d = (hit - ray_origin).dot(inward_dir);
-                if d > 1e-4 && d < closest_dist {
+                if d > RAY_HIT_EPS && d < closest_dist {
                     closest_dist = d;
                 }
             }
@@ -435,14 +493,14 @@ fn inscribed_box(poly: &[Vec2], frontage_idx: usize) -> Option<(Vec2, f32, f32, 
 
     for &sign in &[1.0_f32, -1.0] {
         let ray_origin = back_center;
-        let ray_end = ray_origin + street_dir * sign * 10_000.0;
+        let ray_end = ray_origin + street_dir * sign * ray_extent;
         let mut closest = f32::MAX;
         for j in 0..n {
             let ea = poly[j];
             let eb = poly[(j + 1) % n];
             if let Some(hit) = segment_intersection(ray_origin, ray_end, ea, eb) {
                 let d = (hit - ray_origin).dot(street_dir * sign);
-                if d > 1e-4 && d < closest {
+                if d > RAY_HIT_EPS && d < closest {
                     closest = d;
                 }
             }

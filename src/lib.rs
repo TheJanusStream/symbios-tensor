@@ -40,7 +40,7 @@
 //! let config = TensorConfig::default();
 //!
 //! // 1. Generate road network
-//! let mut graph = generate_roads(&heightmap, &config);
+//! let mut graph = generate_roads(&heightmap, &config).expect("invalid config");
 //!
 //! // 2. Extract city blocks
 //! extract_blocks(&mut graph);
@@ -73,4 +73,4 @@ pub use lots::{BuildingLot, LotConfig, extract_lots};
 pub use polygons::{block_centroid, extract_blocks};
 pub use prune::prune_unused_roads;
 pub use tensor::TensorField;
-pub use tracer::{TensorConfig, generate_roads};
+pub use tracer::{TensorConfig, TensorError, generate_roads};

@@ -15,7 +15,7 @@ fn main() {
         minor_road_dist: 15.0,
         ..Default::default()
     };
-    let mut graph = generate_roads(&hm, &config);
+    let mut graph = generate_roads(&hm, &config).expect("generate_roads");
 
     let active = graph.edges.iter().filter(|e| e.active).count();
     let major = graph

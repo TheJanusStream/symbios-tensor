@@ -7,6 +7,7 @@
 //! configurable intervals to fill the network.
 
 use std::collections::VecDeque;
+use std::fmt;
 
 use glam::Vec2;
 use rand::Rng;
@@ -17,6 +18,21 @@ use symbios_ground::HeightMap;
 use crate::graph::{RoadGraph, RoadType};
 use crate::spatial::{SpatialHash, TraceResult, resolve_trace_step};
 use crate::tensor::TensorField;
+
+/// Error returned when [`generate_roads`] receives an invalid configuration.
+#[derive(Debug, Clone)]
+pub struct TensorError {
+    /// Human-readable description of the invalid parameter.
+    pub message: String,
+}
+
+impl fmt::Display for TensorError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "TensorError: {}", self.message)
+    }
+}
+
+impl std::error::Error for TensorError {}
 
 /// Configuration for tensor-field city generation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -67,31 +83,40 @@ struct Seed {
 /// Generates a [`RoadGraph`] by tracing streamlines through the tensor field
 /// derived from the given heightmap.
 ///
-/// # Panics
+/// # Errors
 ///
-/// Panics if any `TensorConfig` parameter is non-positive (step_size,
-/// major_road_dist, minor_road_dist, snap_radius must all be > 0).
-pub fn generate_roads(heightmap: &HeightMap, config: &TensorConfig) -> RoadGraph {
-    assert!(
-        config.step_size > 0.0,
-        "step_size must be positive, got {}",
-        config.step_size
-    );
-    assert!(
-        config.major_road_dist > 0.0,
-        "major_road_dist must be positive, got {}",
-        config.major_road_dist
-    );
-    assert!(
-        config.minor_road_dist > 0.0,
-        "minor_road_dist must be positive, got {}",
-        config.minor_road_dist
-    );
-    assert!(
-        config.snap_radius > 0.0,
-        "snap_radius must be positive, got {}",
-        config.snap_radius
-    );
+/// Returns [`TensorError`] if any `TensorConfig` parameter is non-positive
+/// (step_size, major_road_dist, minor_road_dist, snap_radius must all be > 0).
+pub fn generate_roads(
+    heightmap: &HeightMap,
+    config: &TensorConfig,
+) -> Result<RoadGraph, TensorError> {
+    if config.step_size <= 0.0 {
+        return Err(TensorError {
+            message: format!("step_size must be positive, got {}", config.step_size),
+        });
+    }
+    if config.major_road_dist <= 0.0 {
+        return Err(TensorError {
+            message: format!(
+                "major_road_dist must be positive, got {}",
+                config.major_road_dist
+            ),
+        });
+    }
+    if config.minor_road_dist <= 0.0 {
+        return Err(TensorError {
+            message: format!(
+                "minor_road_dist must be positive, got {}",
+                config.minor_road_dist
+            ),
+        });
+    }
+    if config.snap_radius <= 0.0 {
+        return Err(TensorError {
+            message: format!("snap_radius must be positive, got {}", config.snap_radius),
+        });
+    }
 
     let field = TensorField::new(heightmap);
     let mut graph = RoadGraph::default();
@@ -177,7 +202,7 @@ pub fn generate_roads(heightmap: &HeightMap, config: &TensorConfig) -> RoadGraph
         );
     }
 
-    graph
+    Ok(graph)
 }
 
 fn trace_streamline(

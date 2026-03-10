@@ -12,7 +12,7 @@ fn bench_generate_roads(c: &mut Criterion) {
     };
 
     c.bench_function("generate_roads_64x64", |b| {
-        b.iter(|| generate_roads(&hm, &config))
+        b.iter(|| generate_roads(&hm, &config).expect("generate_roads"))
     });
 }
 
