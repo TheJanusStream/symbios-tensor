@@ -84,6 +84,6 @@ pub use lots::{BuildingLot, LotConfig, extract_lots};
 pub use polygons::{block_centroid, extract_blocks};
 pub use prune::prune_unused_roads;
 pub use rationalize::{RationalizeConfig, rationalize_graph};
-pub use roads_3d::{ProceduralMesh, RoadMeshConfig, RoadMeshes, generate_road_meshes};
+pub use roads_3d::{ProceduralMesh, RoadMeshConfig, RoadMeshes, SkirtConfig, generate_road_meshes};
 pub use tensor::TensorField;
 pub use tracer::{TensorConfig, TensorError, generate_roads};

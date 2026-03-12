@@ -58,6 +58,8 @@ pub struct RoadMeshConfig {
     /// Legacy: subdivisions per graph edge for Catmull-Rom spline ribbons.
     /// Ignored when the graph has been rationalized (geometry is already smooth).
     pub spline_subdivisions: u32,
+    /// Embankment skirt configuration.
+    pub skirt: SkirtConfig,
 }
 
 impl Default for RoadMeshConfig {
@@ -69,6 +71,7 @@ impl Default for RoadMeshConfig {
             depth_bias: 0.05,
             texture_scale: 0.1,
             spline_subdivisions: 8,
+            skirt: SkirtConfig::default(),
         }
     }
 }
@@ -78,8 +81,28 @@ impl Default for RoadMeshConfig {
 pub struct RoadMeshes {
     /// Intersection / dead-end hub polygons.
     pub hubs: ProceduralMesh,
-    /// Street ribbon strips.
+    /// Street ribbon strips (flat asphalt surface).
     pub ribbons: ProceduralMesh,
+    /// Embankment skirts that taper from the road edge down to terrain.
+    pub skirts: ProceduralMesh,
+}
+
+/// Configuration for the embankment skirts flanking roads.
+#[derive(Debug, Clone)]
+pub struct SkirtConfig {
+    /// Width of the skirt extending outward from the road edge (world units).
+    pub width: f32,
+    /// How far below the terrain surface the skirt buries itself.
+    pub bury_depth: f32,
+}
+
+impl Default for SkirtConfig {
+    fn default() -> Self {
+        Self {
+            width: 3.0,
+            bury_depth: 0.5,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -112,8 +135,9 @@ pub fn generate_road_meshes(
     // --- Ribbons (chains of degree-2 nodes) ---
     let chains = extract_chains(graph, &degrees);
     for chain in &chains {
-        let ribbon = generate_ribbon(graph, chain, &degrees, heightmap, config);
+        let (ribbon, skirt) = generate_ribbon(graph, chain, &degrees, heightmap, config);
         meshes.ribbons.append(&ribbon);
+        meshes.skirts.append(&skirt);
     }
 
     meshes
@@ -158,6 +182,7 @@ fn generate_hub(
     }
 
     let sides = config.hub_sides.max(3);
+    // Flat hub: all vertices share the centerline height.
     let center_y = heightmap.get_height_at(center.x, center.y) + config.depth_bias;
 
     let mut mesh = ProceduralMesh::default();
@@ -170,16 +195,15 @@ fn generate_hub(
         center.y * config.texture_scale,
     ]);
 
-    // Perimeter vertices.
+    // Perimeter vertices — all at centerline height for a flat intersection.
     let angle_step = std::f32::consts::TAU / sides as f32;
     for i in 0..sides {
         let angle = angle_step * i as f32;
         let (sin, cos) = angle.sin_cos();
         let px = center.x + cos * radius;
         let pz = center.y + sin * radius;
-        let py = heightmap.get_height_at(px, pz) + config.depth_bias;
 
-        mesh.vertices.push([px, py, pz]);
+        mesh.vertices.push([px, center_y, pz]);
         mesh.normals.push([0.0, 1.0, 0.0]);
         mesh.uvs
             .push([px * config.texture_scale, pz * config.texture_scale]);
@@ -227,7 +251,7 @@ fn generate_ribbon(
     degrees: &[u32],
     heightmap: &HeightMap,
     config: &RoadMeshConfig,
-) -> ProceduralMesh {
+) -> (ProceduralMesh, ProceduralMesh) {
     let half_width = match chain.road_type {
         RoadType::Major => config.major_half_width,
         RoadType::Minor => config.minor_half_width,
@@ -237,7 +261,7 @@ fn generate_ribbon(
     // rationalized the geometry is already smooth — no spline needed.
     let smooth_pts: Vec<Vec2> = chain.nodes.iter().map(|&nid| graph.node_pos(nid)).collect();
     if smooth_pts.len() < 2 {
-        return ProceduralMesh::default();
+        return (ProceduralMesh::default(), ProceduralMesh::default());
     }
 
     // Truncate at hub boundaries.
@@ -248,10 +272,10 @@ fn generate_ribbon(
 
     let truncated = truncate_polyline(&smooth_pts, start_radius, end_radius);
     if truncated.len() < 2 {
-        return ProceduralMesh::default();
+        return (ProceduralMesh::default(), ProceduralMesh::default());
     }
 
-    // Extrude ribbon.
+    // Extrude flat asphalt ribbon + embankment skirts.
     extrude_ribbon(&truncated, half_width, heightmap, config)
 }
 
@@ -339,25 +363,45 @@ fn point_at_arc_length(points: &[Vec2], arc_lengths: &[f32], target: f32) -> Vec
     *points.last().unwrap()
 }
 
-/// Extrudes a 2D polyline into a ribbon mesh with height sampling.
+/// Extrudes a 2D polyline into a flat asphalt ribbon and tapered embankment
+/// skirt meshes.
+///
+/// **Asphalt**: Both left and right edges share the centerline height, producing
+/// a perfectly flat, horizontal driving surface.
+///
+/// **Skirts**: Two strips (one per side) that attach to the asphalt edge and
+/// taper outward and downward to the terrain surface minus `bury_depth`,
+/// creating a smooth cut-and-fill embankment.
 fn extrude_ribbon(
     points: &[Vec2],
     half_width: f32,
     heightmap: &HeightMap,
     config: &RoadMeshConfig,
-) -> ProceduralMesh {
+) -> (ProceduralMesh, ProceduralMesh) {
     let n = points.len();
-    let mut mesh = ProceduralMesh {
+    let skirt_w = config.skirt.width;
+    let bury = config.skirt.bury_depth;
+
+    // --- Asphalt (flat surface) ---
+    let mut asphalt = ProceduralMesh {
         vertices: Vec::with_capacity(n * 2),
         normals: Vec::with_capacity(n * 2),
         uvs: Vec::with_capacity(n * 2),
         indices: Vec::with_capacity((n - 1) * 6),
     };
 
+    // --- Skirts (left + right embankment strips) ---
+    // Each side has n * 2 vertices (inner edge at road height, outer edge at terrain).
+    let mut skirts = ProceduralMesh {
+        vertices: Vec::with_capacity(n * 4),
+        normals: Vec::with_capacity(n * 4),
+        uvs: Vec::with_capacity(n * 4),
+        indices: Vec::with_capacity((n - 1) * 12),
+    };
+
     let mut accum_dist = 0.0f32;
 
     for i in 0..n {
-        // Tangent: forward difference, backward at end, average in middle.
         let tangent = if i == 0 {
             (points[1] - points[0]).normalize_or_zero()
         } else if i == n - 1 {
@@ -366,51 +410,109 @@ fn extrude_ribbon(
             (points[i + 1] - points[i - 1]).normalize_or_zero()
         };
 
-        // 2D right normal (perpendicular to tangent).
         let right = Vec2::new(-tangent.y, tangent.x);
 
-        // Left and right extrusion.
         let left_pt = points[i] - right * half_width;
         let right_pt = points[i] + right * half_width;
 
-        // Sample heights.
-        let left_y = heightmap.get_height_at(left_pt.x, left_pt.y) + config.depth_bias;
-        let right_y = heightmap.get_height_at(right_pt.x, right_pt.y) + config.depth_bias;
+        // Centerline height — shared by both asphalt edges.
+        let center_y = heightmap.get_height_at(points[i].x, points[i].y) + config.depth_bias;
 
-        mesh.vertices.push([right_pt.x, right_y, right_pt.y]);
-        mesh.vertices.push([left_pt.x, left_y, left_pt.y]);
+        // Asphalt vertices: right (idx 2i), left (idx 2i+1).
+        asphalt.vertices.push([right_pt.x, center_y, right_pt.y]);
+        asphalt.vertices.push([left_pt.x, center_y, left_pt.y]);
+        asphalt.normals.push([0.0, 1.0, 0.0]);
+        asphalt.normals.push([0.0, 1.0, 0.0]);
 
-        mesh.normals.push([0.0, 1.0, 0.0]);
-        mesh.normals.push([0.0, 1.0, 0.0]);
-
-        // UV: U = accumulated arc distance (scaled), V = 0 left, 1 right.
         if i > 0 {
             accum_dist += (points[i] - points[i - 1]).length();
         }
         let u = accum_dist * config.texture_scale;
-        mesh.uvs.push([u, 0.0]);
-        mesh.uvs.push([u, 1.0]);
+        asphalt.uvs.push([u, 0.0]);
+        asphalt.uvs.push([u, 1.0]);
+
+        // Skirt geometry — 4 vertices per cross-section:
+        //   [0] right inner (at road edge, road height)
+        //   [1] right outer (skirt_w outward, terrain - bury)
+        //   [2] left inner  (at road edge, road height)
+        //   [3] left outer  (skirt_w outward, terrain - bury)
+        let right_outer_pt = points[i] + right * (half_width + skirt_w);
+        let left_outer_pt = points[i] - right * (half_width + skirt_w);
+
+        let right_outer_y =
+            heightmap.get_height_at(right_outer_pt.x, right_outer_pt.y) - bury;
+        let left_outer_y =
+            heightmap.get_height_at(left_outer_pt.x, left_outer_pt.y) - bury;
+
+        // Right skirt: inner then outer.
+        skirts.vertices.push([right_pt.x, center_y, right_pt.y]);
+        skirts.vertices.push([right_outer_pt.x, right_outer_y, right_outer_pt.y]);
+        // Left skirt: inner then outer.
+        skirts.vertices.push([left_pt.x, center_y, left_pt.y]);
+        skirts.vertices.push([left_outer_pt.x, left_outer_y, left_outer_pt.y]);
+
+        skirts.normals.push([0.0, 1.0, 0.0]);
+        skirts.normals.push([0.0, 1.0, 0.0]);
+        skirts.normals.push([0.0, 1.0, 0.0]);
+        skirts.normals.push([0.0, 1.0, 0.0]);
+
+        let skirt_u = u;
+        skirts.uvs.push([skirt_u, 0.0]);
+        skirts.uvs.push([skirt_u, 1.0]);
+        skirts.uvs.push([skirt_u, 0.0]);
+        skirts.uvs.push([skirt_u, 1.0]);
     }
 
-    // Triangle strip → index buffer (two triangles per quad).
+    // Asphalt index buffer.
     for i in 0..n as u32 - 1 {
-        let bl = i * 2; // bottom-left
-        let br = i * 2 + 1; // bottom-right
-        let tl = (i + 1) * 2; // top-left
-        let tr = (i + 1) * 2 + 1; // top-right
+        let bl = i * 2;
+        let br = i * 2 + 1;
+        let tl = (i + 1) * 2;
+        let tr = (i + 1) * 2 + 1;
 
-        // Triangle 1
-        mesh.indices.push(bl);
-        mesh.indices.push(tl);
-        mesh.indices.push(br);
+        asphalt.indices.push(bl);
+        asphalt.indices.push(tl);
+        asphalt.indices.push(br);
 
-        // Triangle 2
-        mesh.indices.push(br);
-        mesh.indices.push(tl);
-        mesh.indices.push(tr);
+        asphalt.indices.push(br);
+        asphalt.indices.push(tl);
+        asphalt.indices.push(tr);
     }
 
-    mesh
+    // Skirt index buffer — two quads per segment (right side + left side).
+    for i in 0..n as u32 - 1 {
+        let base = i * 4;
+        let next = (i + 1) * 4;
+
+        // Right skirt quad: inner=[base+0], outer=[base+1].
+        let ri0 = base;
+        let ro0 = base + 1;
+        let ri1 = next;
+        let ro1 = next + 1;
+
+        skirts.indices.push(ri0);
+        skirts.indices.push(ri1);
+        skirts.indices.push(ro0);
+        skirts.indices.push(ro0);
+        skirts.indices.push(ri1);
+        skirts.indices.push(ro1);
+
+        // Left skirt quad: inner=[base+2], outer=[base+3].
+        // Winding is reversed so face normal points outward (left).
+        let li0 = base + 2;
+        let lo0 = base + 3;
+        let li1 = next + 2;
+        let lo1 = next + 3;
+
+        skirts.indices.push(li0);
+        skirts.indices.push(lo0);
+        skirts.indices.push(li1);
+        skirts.indices.push(lo0);
+        skirts.indices.push(lo1);
+        skirts.indices.push(li1);
+    }
+
+    (asphalt, skirts)
 }
 
 // ---------------------------------------------------------------------------
