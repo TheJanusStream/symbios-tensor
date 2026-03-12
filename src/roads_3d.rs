@@ -12,6 +12,7 @@ use glam::Vec2;
 use symbios_ground::HeightMap;
 
 use crate::graph::{NodeId, RoadGraph, RoadType};
+use crate::topology;
 
 /// Engine-agnostic mesh container.
 ///
@@ -54,8 +55,8 @@ pub struct RoadMeshConfig {
     pub depth_bias: f32,
     /// UV texture scale: world units per texture repeat.
     pub texture_scale: f32,
-    /// Number of subdivisions per graph edge when generating Catmull-Rom
-    /// spline points for ribbons.
+    /// Legacy: subdivisions per graph edge for Catmull-Rom spline ribbons.
+    /// Ignored when the graph has been rationalized (geometry is already smooth).
     pub spline_subdivisions: u32,
 }
 
@@ -119,19 +120,11 @@ pub fn generate_road_meshes(
 }
 
 // ---------------------------------------------------------------------------
-// Node degree computation
+// Node degree computation (delegated to topology module)
 // ---------------------------------------------------------------------------
 
 fn compute_active_degrees(graph: &RoadGraph) -> Vec<u32> {
-    let mut degrees = vec![0u32; graph.nodes.len()];
-    for edge in &graph.edges {
-        if !edge.active {
-            continue;
-        }
-        degrees[edge.start as usize] += 1;
-        degrees[edge.end as usize] += 1;
-    }
-    degrees
+    topology::compute_active_degrees(graph)
 }
 
 // ---------------------------------------------------------------------------
@@ -205,224 +198,23 @@ fn generate_hub(
 }
 
 // ---------------------------------------------------------------------------
-// Chain extraction (paths of degree-2 nodes)
+// Chain extraction (delegated to topology module)
 // ---------------------------------------------------------------------------
 
-/// A chain is a sequence of NodeIds from one junction/dead-end to another,
-/// passing through only degree-2 interior nodes.
+/// Local alias — the ribbon generator only needs nodes and road type.
 struct Chain {
     nodes: Vec<NodeId>,
     road_type: RoadType,
 }
 
 fn extract_chains(graph: &RoadGraph, degrees: &[u32]) -> Vec<Chain> {
-    let mut visited_edges = vec![false; graph.edges.len()];
-    let mut chains = Vec::new();
-
-    for (eid, edge) in graph.edges.iter().enumerate() {
-        if !edge.active || visited_edges[eid] {
-            continue;
-        }
-
-        // Start a chain from this edge.
-        let mut chain_nodes = Vec::new();
-        let road_type = edge.road_type;
-
-        // Mark the seed edge as visited *before* walking so that pure
-        // cycles (every node degree-2) cannot loop back through it.
-        visited_edges[eid] = true;
-
-        // Walk backwards from edge.start as far as degree-2 nodes go.
-        let head = walk_chain(
-            graph,
-            degrees,
-            edge.start,
-            eid as u32,
-            &mut visited_edges,
-            road_type,
-        );
-        head.into_iter().rev().for_each(|n| chain_nodes.push(n));
-
-        // Now walk forward from edge.end.
-        chain_nodes.push(edge.start);
-        chain_nodes.push(edge.end);
-
-        let tail = walk_chain(
-            graph,
-            degrees,
-            edge.end,
-            eid as u32,
-            &mut visited_edges,
-            road_type,
-        );
-        chain_nodes.extend(tail);
-
-        // Deduplicate the start node if walk_chain returned it.
-        dedup_consecutive(&mut chain_nodes);
-
-        if chain_nodes.len() >= 2 {
-            chains.push(Chain {
-                nodes: chain_nodes,
-                road_type,
-            });
-        }
-    }
-
-    chains
-}
-
-/// Walk along degree-2 nodes starting from `start_node`, not going back
-/// through `from_edge`. Returns the sequence of nodes visited (not including
-/// `start_node`).
-fn walk_chain(
-    graph: &RoadGraph,
-    degrees: &[u32],
-    start_node: NodeId,
-    from_edge: u32,
-    visited_edges: &mut [bool],
-    road_type: RoadType,
-) -> Vec<NodeId> {
-    let mut result = Vec::new();
-    let mut current = start_node;
-    let mut prev_edge = from_edge;
-
-    // Only walk through degree-2 nodes.
-    if degrees[current as usize] != 2 {
-        return result;
-    }
-
-    loop {
-        // Find the other active edge at this degree-2 node.
-        let node = &graph.nodes[current as usize];
-        let mut next_edge = None;
-        for &eid in &node.edges {
-            if eid == prev_edge {
-                continue;
-            }
-            let e = &graph.edges[eid as usize];
-            if !e.active || visited_edges[eid as usize] {
-                continue;
-            }
-            // Only follow edges of the same road type for a clean chain.
-            if e.road_type != road_type {
-                continue;
-            }
-            next_edge = Some(eid);
-            break;
-        }
-
-        let Some(ne) = next_edge else { break };
-        visited_edges[ne as usize] = true;
-
-        let next_node = graph.opposite(ne, current);
-        result.push(next_node);
-
-        if degrees[next_node as usize] != 2 {
-            break;
-        }
-        prev_edge = ne;
-        current = next_node;
-    }
-
-    result
-}
-
-fn dedup_consecutive(v: &mut Vec<NodeId>) {
-    v.dedup();
-}
-
-// ---------------------------------------------------------------------------
-// Catmull-Rom spline
-// ---------------------------------------------------------------------------
-
-/// Centripetal Catmull-Rom interpolation between p1 and p2, given surrounding
-/// control points p0 and p3.
-fn catmull_rom(p0: Vec2, p1: Vec2, p2: Vec2, p3: Vec2, t: f32) -> Vec2 {
-    let alpha = 0.5; // centripetal
-
-    fn knot(ti: f32, pi: Vec2, pj: Vec2, alpha: f32) -> f32 {
-        let d = pj - pi;
-        let len = d.length_squared().powf(alpha * 0.5);
-        ti + len
-    }
-
-    let t0 = 0.0f32;
-    let t1 = knot(t0, p0, p1, alpha);
-    let t2 = knot(t1, p1, p2, alpha);
-    let t3 = knot(t2, p2, p3, alpha);
-
-    let tt = t1 + t * (t2 - t1);
-
-    let a1 = lerp2(p0, p1, t0, t1, tt);
-    let a2 = lerp2(p1, p2, t1, t2, tt);
-    let a3 = lerp2(p2, p3, t2, t3, tt);
-
-    let b1 = lerp2(a1, a2, t0, t2, tt);
-    let b2 = lerp2(a2, a3, t1, t3, tt);
-
-    lerp2(b1, b2, t1, t2, tt)
-}
-
-fn lerp2(a: Vec2, b: Vec2, t0: f32, t1: f32, t: f32) -> Vec2 {
-    let denom = t1 - t0;
-    if denom.abs() < 1e-10 {
-        return a;
-    }
-    a + (b - a) * ((t - t0) / denom)
-}
-
-/// Generates a smooth polyline from a chain of 2D points using Catmull-Rom
-/// splines. Returns a dense sequence of 2D points.
-fn smooth_chain(points: &[Vec2], subdivisions: u32) -> Vec<Vec2> {
-    if points.len() < 2 {
-        return points.to_vec();
-    }
-
-    // Guard against zero subdivisions which would cause NaN from 0.0/0.0
-    // division, poisoning all downstream vertex positions.
-    let subdivisions = subdivisions.max(1);
-
-    if points.len() == 2 {
-        // Just linearly subdivide.
-        let mut result = Vec::with_capacity(subdivisions as usize + 1);
-        for i in 0..=subdivisions {
-            let t = i as f32 / subdivisions as f32;
-            result.push(points[0].lerp(points[1], t));
-        }
-        return result;
-    }
-
-    let n = points.len();
-    let mut result = Vec::new();
-
-    for seg in 0..n - 1 {
-        let p0 = if seg == 0 {
-            // Mirror first point.
-            points[0] * 2.0 - points[1]
-        } else {
-            points[seg - 1]
-        };
-        let p1 = points[seg];
-        let p2 = points[seg + 1];
-        let p3 = if seg + 2 < n {
-            points[seg + 2]
-        } else {
-            // Mirror last point.
-            points[n - 1] * 2.0 - points[n - 2]
-        };
-
-        let count = if seg == n - 2 {
-            subdivisions + 1
-        } else {
-            subdivisions
-        };
-        for i in 0..count {
-            let t = i as f32 / subdivisions as f32;
-            result.push(catmull_rom(p0, p1, p2, p3, t));
-        }
-    }
-
-    result
+    topology::extract_chains(graph, degrees)
+        .into_iter()
+        .map(|c| Chain {
+            nodes: c.nodes,
+            road_type: c.road_type,
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -441,14 +233,9 @@ fn generate_ribbon(
         RoadType::Minor => config.minor_half_width,
     };
 
-    // Gather 2D positions along the chain.
-    let raw_points: Vec<Vec2> = chain.nodes.iter().map(|&nid| graph.node_pos(nid)).collect();
-    if raw_points.len() < 2 {
-        return ProceduralMesh::default();
-    }
-
-    // Smooth with Catmull-Rom.
-    let smooth_pts = smooth_chain(&raw_points, config.spline_subdivisions);
+    // Gather 2D positions along the chain. When the graph has been
+    // rationalized the geometry is already smooth — no spline needed.
+    let smooth_pts: Vec<Vec2> = chain.nodes.iter().map(|&nid| graph.node_pos(nid)).collect();
     if smooth_pts.len() < 2 {
         return ProceduralMesh::default();
     }
@@ -690,18 +477,6 @@ mod tests {
         assert!(!meshes.ribbons.vertices.is_empty());
         // Indices should be divisible by 3 (triangles).
         assert_eq!(meshes.ribbons.indices.len() % 3, 0);
-    }
-
-    #[test]
-    fn smooth_chain_preserves_endpoints() {
-        let pts = vec![
-            Vec2::new(0.0, 0.0),
-            Vec2::new(10.0, 5.0),
-            Vec2::new(20.0, 0.0),
-        ];
-        let smoothed = smooth_chain(&pts, 4);
-        assert!((smoothed[0] - pts[0]).length() < 1e-4);
-        assert!((*smoothed.last().unwrap() - *pts.last().unwrap()).length() < 1e-4);
     }
 
     #[test]
