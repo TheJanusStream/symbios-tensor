@@ -304,18 +304,11 @@ fn trace_streamline(
                     let crossing =
                         find_crossing(graph, spatial, current_pos, n_pos, current_node, n_id);
                     if let Some((cross_eid, cross_pt)) = crossing {
-                        let ce = &graph.edges[cross_eid as usize];
-                        let ce_start = graph.node_pos(ce.start);
-                        let ce_end = graph.node_pos(ce.end);
-
-                        let (mid_node, ea, eb) = graph.split_edge(cross_eid, cross_pt);
-                        spatial.remove_edge(cross_eid, ce_start, ce_end);
-                        spatial.insert_node(mid_node, cross_pt);
-                        spatial.insert_edge(ea, ce_start, cross_pt);
-                        spatial.insert_edge(eb, cross_pt, ce_end);
+                        let mid_node = split_or_snap_edge(graph, spatial, cross_eid, cross_pt);
+                        let mid_pos = graph.node_pos(mid_node);
 
                         let connecting = graph.add_edge(current_node, mid_node, seed.road_type);
-                        spatial.insert_edge(connecting, current_pos, cross_pt);
+                        spatial.insert_edge(connecting, current_pos, mid_pos);
                     } else {
                         let edge_id = graph.add_edge(current_node, n_id, seed.road_type);
                         spatial.insert_edge(edge_id, current_pos, n_pos);
@@ -332,21 +325,29 @@ fn trace_streamline(
                 let old_end_pos_pre = graph.node_pos(split_edge.end);
                 let edge_dir = (old_end_pos_pre - old_start_pos_pre).normalize_or_zero();
 
-                let (mid_node, ea, eb) = graph.split_edge(edge_id, intersection_pos);
-                spatial.remove_edge(edge_id, old_start_pos_pre, old_end_pos_pre);
-                spatial.insert_node(mid_node, intersection_pos);
+                let mid_node = split_or_snap_edge(graph, spatial, edge_id, intersection_pos);
+                let mid_pos = graph.node_pos(mid_node);
 
-                let old_start_pos = graph.node_pos(graph.edges[ea as usize].start);
-                let old_end_pos = graph.node_pos(graph.edges[eb as usize].end);
-                spatial.insert_edge(ea, old_start_pos, intersection_pos);
-                spatial.insert_edge(eb, intersection_pos, old_end_pos);
+                // The snap target (intersection_pos) can be up to snap_radius
+                // away from proposed_pos, sweeping the connecting segment
+                // through unverified space. Re-check for crossings to
+                // maintain planarity, mirroring the SnappedToNode branch.
+                let crossing =
+                    find_crossing(graph, spatial, current_pos, mid_pos, current_node, mid_node);
+                if let Some((cross_eid, cross_pt)) = crossing {
+                    let cross_mid = split_or_snap_edge(graph, spatial, cross_eid, cross_pt);
+                    let cross_pos = graph.node_pos(cross_mid);
+
+                    let connecting_edge = graph.add_edge(current_node, cross_mid, seed.road_type);
+                    spatial.insert_edge(connecting_edge, current_pos, cross_pos);
+                    // Terminate: we hit a crossing before reaching the
+                    // snapped edge, so continuing from mid_node would
+                    // leave a gap in the graph.
+                    break;
+                }
 
                 let connecting_edge = graph.add_edge(current_node, mid_node, seed.road_type);
-                spatial.insert_edge(
-                    connecting_edge,
-                    graph.node_pos(current_node),
-                    intersection_pos,
-                );
+                spatial.insert_edge(connecting_edge, graph.node_pos(current_node), mid_pos);
 
                 // If the trace direction is nearly parallel to the edge
                 // we just split, continuing would create overlapping
@@ -392,6 +393,43 @@ fn trace_streamline(
             }
         }
     }
+}
+
+/// Minimum squared distance between a split point and an existing endpoint.
+/// If a cross-point falls closer than this to an edge's start or end node,
+/// we snap to that node instead of inserting a degenerate micro-segment.
+const SPLIT_SNAP_DIST_SQ: f32 = 1.0;
+
+/// Splits `edge_id` at `split_pos`, or snaps to an existing endpoint if
+/// `split_pos` is within `SPLIT_SNAP_DIST_SQ` of one. Returns the node
+/// at the split (or snapped endpoint). When a real split occurs the two
+/// new half-edge IDs are returned; when snapping, no new edges are created.
+fn split_or_snap_edge(
+    graph: &mut RoadGraph,
+    spatial: &mut SpatialHash,
+    edge_id: u32,
+    split_pos: Vec2,
+) -> u32 {
+    let edge = &graph.edges[edge_id as usize];
+    let start = edge.start;
+    let end = edge.end;
+    let start_pos = graph.node_pos(start);
+    let end_pos = graph.node_pos(end);
+
+    // Snap to existing endpoint if the split point is very close
+    if split_pos.distance_squared(start_pos) < SPLIT_SNAP_DIST_SQ {
+        return start;
+    }
+    if split_pos.distance_squared(end_pos) < SPLIT_SNAP_DIST_SQ {
+        return end;
+    }
+
+    let (mid_node, ea, eb) = graph.split_edge(edge_id, split_pos);
+    spatial.remove_edge(edge_id, start_pos, end_pos);
+    spatial.insert_node(mid_node, split_pos);
+    spatial.insert_edge(ea, start_pos, split_pos);
+    spatial.insert_edge(eb, split_pos, end_pos);
+    mid_node
 }
 
 /// Checks whether the segment `from -> to` crosses any active edge not

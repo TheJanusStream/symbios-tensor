@@ -29,9 +29,9 @@ const POINT_ON_SEG_TOLERANCE: f32 = 1e-3;
 /// Minimum positive ray hit distance to avoid self-intersection artifacts.
 const RAY_HIT_EPS: f32 = 1e-4;
 
-/// Maximum bounding-box aspect ratio for polygon subdivision. Polygons
-/// whose OBB is more skewed than this are treated as degenerate slivers
-/// and skipped to avoid wasting cycles on recursive splitting.
+/// Maximum OBB aspect ratio for polygon subdivision. Polygons whose
+/// oriented bounding box (aligned to the longest edge) is more skewed
+/// than this are treated as degenerate slivers and skipped.
 const MAX_SUBDIVISION_ASPECT_RATIO: f32 = 20.0;
 
 /// Configuration for lot subdivision and building footprint extraction.
@@ -316,21 +316,33 @@ fn subdivide_polygon(
         return vec![poly.to_vec()];
     }
 
-    // Early-exit for degenerate slivers: if the polygon's axis-aligned
-    // bounding box is excessively skewed, further subdivision will only
-    // waste cycles producing sub-threshold fragments.
-    let (mut bb_min, mut bb_max) = (poly[0], poly[0]);
-    for &v in &poly[1..] {
-        bb_min = bb_min.min(v);
-        bb_max = bb_max.max(v);
+    // Early-exit for degenerate slivers: if the polygon's OBB (oriented
+    // along the longest edge) is excessively skewed, further subdivision
+    // will only waste cycles producing sub-threshold fragments. Using the
+    // OBB instead of the AABB ensures diagonal slivers are caught too.
+    let li = longest_edge_index(poly);
+    let n = poly.len();
+    let edge_a = poly[li];
+    let edge_b = poly[(li + 1) % n];
+    let obb_dir = (edge_b - edge_a).normalize_or_zero();
+    let obb_perp = Vec2::new(-obb_dir.y, obb_dir.x);
+
+    let mut min_along = f32::MAX;
+    let mut max_along = f32::MIN;
+    let mut min_perp = f32::MAX;
+    let mut max_perp = f32::MIN;
+    for &v in poly {
+        let d = v - edge_a;
+        let proj_along = d.dot(obb_dir);
+        let proj_perp = d.dot(obb_perp);
+        min_along = min_along.min(proj_along);
+        max_along = max_along.max(proj_along);
+        min_perp = min_perp.min(proj_perp);
+        max_perp = max_perp.max(proj_perp);
     }
-    let extent = bb_max - bb_min;
-    let (short, long) = if extent.x < extent.y {
-        (extent.x, extent.y)
-    } else {
-        (extent.y, extent.x)
-    };
-    if short > 0.0 && long / short > MAX_SUBDIVISION_ASPECT_RATIO {
+    let obb_long = max_along - min_along;
+    let obb_short = max_perp - min_perp;
+    if obb_short > 0.0 && obb_long / obb_short > MAX_SUBDIVISION_ASPECT_RATIO {
         return vec![poly.to_vec()];
     }
 

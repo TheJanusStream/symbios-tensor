@@ -307,10 +307,12 @@ pub fn prune_unused_roads(graph: &mut RoadGraph, lots: &[BuildingLot]) {
                 }
             }
 
-            // Mark all island essential nodes as handled so the
-            // outer loop doesn't retry them
+            // Mark island essential nodes as handled so the outer loop
+            // doesn't retry them. Do NOT insert into connected_nodes —
+            // these are on a different component and would cause the
+            // main Dijkstra to fruitlessly re-explore dead-end islands
+            // on every subsequent iteration.
             for n in &island_seed {
-                connected_nodes.insert(*n);
                 unreached_essential.remove(n);
             }
         }
