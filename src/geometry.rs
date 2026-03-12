@@ -29,7 +29,7 @@ pub fn segment_intersection(a1: Vec2, a2: Vec2, b1: Vec2, b2: Vec2) -> Option<Ve
     let denom = -s2.x * s1.y + s1.x * s2.y;
     // Use a relative threshold so the parallel check works at any scale.
     let len_product = s1.length() * s2.length();
-    if denom.abs() < PARALLEL_REL_EPS * len_product {
+    if denom.abs() <= PARALLEL_REL_EPS * len_product {
         return None;
     }
 

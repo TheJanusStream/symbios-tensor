@@ -39,68 +39,94 @@ pub fn carve_lots(
         );
     }
 
+    // Track cells that have been set to a lot foundation height so that
+    // the embankment pass does not overwrite them (same pattern as carve_roads).
+    let mut is_lot_surface = vec![false; hw * hh];
+
+    // Pass 1: flatten all lot foundation surfaces.
     for lot in lots {
-        // 1. Determine the target foundation height (e.g., sample the center)
         let target_h = heightmap.get_height_at(lot.position.x, lot.position.y);
 
-        let half_w = lot.width * 0.5;
-        let half_d = lot.depth * 0.5;
+        let lp = LotParams {
+            center: lot.position,
+            cos: lot.rotation.cos(),
+            sin: lot.rotation.sin(),
+            half_w: lot.width * 0.5,
+            half_d: lot.depth * 0.5,
+        };
 
-        // Calculate a generous Axis-Aligned Bounding Box (AABB) to limit our grid search
-        let max_radius = half_w.hypot(half_d) + blend_radius + scale * 2.0;
-        let min_x = (lot.position.x - max_radius).max(0.0);
-        let max_x = (lot.position.x + max_radius).min((hw - 1) as f32 * scale);
-        let min_z = (lot.position.y - max_radius).max(0.0);
-        let max_z = (lot.position.y + max_radius).min((hh - 1) as f32 * scale);
-
-        let gx_start = (min_x / scale).floor() as usize;
-        let gx_end = ((max_x / scale).ceil() as usize).min(hw - 1);
-        let gz_start = (min_z / scale).floor() as usize;
-        let gz_end = ((max_z / scale).ceil() as usize).min(hh - 1);
-
-        let cos = lot.rotation.cos();
-        let sin = lot.rotation.sin();
+        let (gx_start, gx_end, gz_start, gz_end) =
+            lot_grid_bounds(lot, lp.half_w, lp.half_d, blend_radius, scale, hw, hh);
 
         for gz in gz_start..=gz_end {
             for gx in gx_start..=gx_end {
-                let world_x = gx as f32 * scale;
-                let world_z = gz as f32 * scale;
-
-                // 2. Transform world coordinates to Lot Local Space
-                let dx = world_x - lot.position.x;
-                let dz = world_z - lot.position.y;
-
-                // Inverse rotation (2D)
-                let local_x = dx * cos + dz * sin;
-                let local_z = -dx * sin + dz * cos;
-
-                // 3. Calculate distance from the edge of the lot
-                let dist_x = local_x.abs() - half_w;
-                let dist_z = local_z.abs() - half_d;
-
-                // Distance to the rectangle.
-                // If both are < 0, we are inside.
-                // If > 0, we use length() to get rounded corners on the blend zone.
-                let dist_to_edge = dist_x.max(0.0).hypot(dist_z.max(0.0));
-
-                // Never overwrite cells that are part of a road surface.
                 if let Some(mask) = road_surface
                     && mask[gz * hw + gx]
                 {
                     continue;
                 }
 
+                let dist_to_edge = lot_cell_distance(gx, gz, scale, &lp);
+
                 if dist_to_edge <= 0.0 {
-                    // Strictly inside the footprint: Flat foundation
                     heightmap.set(gx, gz, target_h);
-                } else if dist_to_edge < blend_radius {
-                    // Inside the blend zone: Smooth interpolation (e.g., smoothstep)
-                    let t = dist_to_edge / blend_radius;
-                    // Simple linear blend (or use a smoothstep for softer embankments)
-                    let terrain_h = heightmap.get(gx, gz);
-                    let blended_h = target_h + t * (terrain_h - target_h);
-                    heightmap.set(gx, gz, blended_h);
+                    is_lot_surface[gz * hw + gx] = true;
                 }
+            }
+        }
+    }
+
+    // Pass 2: embankments — for each cell, only the closest lot's embankment
+    // applies. Protected cells (road surfaces and lot foundations) are skipped.
+    let mut embankment_dist = vec![f32::MAX; hw * hh];
+    let mut embankment_lot_h = vec![0.0_f32; hw * hh];
+
+    for lot in lots {
+        let target_h = heightmap.get_height_at(lot.position.x, lot.position.y);
+
+        let lp = LotParams {
+            center: lot.position,
+            cos: lot.rotation.cos(),
+            sin: lot.rotation.sin(),
+            half_w: lot.width * 0.5,
+            half_d: lot.depth * 0.5,
+        };
+
+        let (gx_start, gx_end, gz_start, gz_end) =
+            lot_grid_bounds(lot, lp.half_w, lp.half_d, blend_radius, scale, hw, hh);
+
+        for gz in gz_start..=gz_end {
+            for gx in gx_start..=gx_end {
+                let idx = gz * hw + gx;
+
+                if let Some(mask) = road_surface
+                    && mask[idx]
+                {
+                    continue;
+                }
+                if is_lot_surface[idx] {
+                    continue;
+                }
+
+                let dist_to_edge = lot_cell_distance(gx, gz, scale, &lp);
+
+                if dist_to_edge > 0.0 && dist_to_edge < blend_radius && dist_to_edge < embankment_dist[idx] {
+                    embankment_dist[idx] = dist_to_edge;
+                    embankment_lot_h[idx] = target_h;
+                }
+            }
+        }
+    }
+
+    // Apply the winning embankment blend for each cell.
+    for gz in 0..hh {
+        for gx in 0..hw {
+            let idx = gz * hw + gx;
+            if embankment_dist[idx] < f32::MAX {
+                let t = embankment_dist[idx] / blend_radius;
+                let terrain_h = heightmap.get(gx, gz);
+                let blended_h = embankment_lot_h[idx] + t * (terrain_h - embankment_lot_h[idx]);
+                heightmap.set(gx, gz, blended_h);
             }
         }
     }
@@ -275,4 +301,50 @@ fn project_cell(
     let dist = glam::Vec2::new(world_x - proj.x, world_z - proj.y).length();
     let road_h = start_h + t * (end_h - start_h);
     (dist, road_h)
+}
+
+/// Computes the grid cell range for a lot's AABB (footprint + blend radius).
+fn lot_grid_bounds(
+    lot: &BuildingLot,
+    half_w: f32,
+    half_d: f32,
+    blend_radius: f32,
+    scale: f32,
+    hw: usize,
+    hh: usize,
+) -> (usize, usize, usize, usize) {
+    let max_radius = half_w.hypot(half_d) + blend_radius + scale * 2.0;
+    let min_x = (lot.position.x - max_radius).max(0.0);
+    let max_x = (lot.position.x + max_radius).min((hw - 1) as f32 * scale);
+    let min_z = (lot.position.y - max_radius).max(0.0);
+    let max_z = (lot.position.y + max_radius).min((hh - 1) as f32 * scale);
+    (
+        (min_x / scale).floor() as usize,
+        ((max_x / scale).ceil() as usize).min(hw - 1),
+        (min_z / scale).floor() as usize,
+        ((max_z / scale).ceil() as usize).min(hh - 1),
+    )
+}
+
+/// Precomputed parameters for a lot's OBB distance queries.
+struct LotParams {
+    center: glam::Vec2,
+    cos: f32,
+    sin: f32,
+    half_w: f32,
+    half_d: f32,
+}
+
+/// Returns the distance from a grid cell to the edge of a lot's OBB.
+/// Zero means on the edge or inside the footprint, positive means outside.
+fn lot_cell_distance(gx: usize, gz: usize, scale: f32, lp: &LotParams) -> f32 {
+    let world_x = gx as f32 * scale;
+    let world_z = gz as f32 * scale;
+    let dx = world_x - lp.center.x;
+    let dz = world_z - lp.center.y;
+    let local_x = dx * lp.cos + dz * lp.sin;
+    let local_z = -dx * lp.sin + dz * lp.cos;
+    let dist_x = local_x.abs() - lp.half_w;
+    let dist_z = local_z.abs() - lp.half_d;
+    dist_x.max(0.0).hypot(dist_z.max(0.0))
 }
