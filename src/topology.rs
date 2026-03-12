@@ -190,6 +190,15 @@ pub fn extract_arteries(graph: &RoadGraph, degrees: &[u32], road_type: RoadType)
 
         visited_edges[eid] = true;
 
+        // Track visited nodes to prevent figure-8 self-crossings.
+        // If the tensor field causes a road to loop back through a
+        // previously visited node, continuing would produce a
+        // self-intersecting polyline that breaks graph planarity when
+        // replaced by rationalize_artery's smoothed geometry.
+        let mut visited_nodes = vec![false; graph.nodes.len()];
+        visited_nodes[edge.start as usize] = true;
+        visited_nodes[edge.end as usize] = true;
+
         // Walk backwards from edge.start.
         let (mut head_nodes, mut head_edges) = walk_artery(
             graph,
@@ -198,6 +207,7 @@ pub fn extract_arteries(graph: &RoadGraph, degrees: &[u32], road_type: RoadType)
             edge.end, // "came from" direction
             eid as EdgeId,
             &mut visited_edges,
+            &mut visited_nodes,
             road_type,
         );
         head_nodes.reverse();
@@ -216,6 +226,7 @@ pub fn extract_arteries(graph: &RoadGraph, degrees: &[u32], road_type: RoadType)
             edge.start, // "came from" direction
             eid as EdgeId,
             &mut visited_edges,
+            &mut visited_nodes,
             road_type,
         );
         head_nodes.extend(tail_nodes);
@@ -240,6 +251,7 @@ pub fn extract_arteries(graph: &RoadGraph, degrees: &[u32], road_type: RoadType)
 ///
 /// `came_from_node` is the node we arrived from (for computing forward direction).
 /// Returns `(nodes_visited, edges_traversed)` — `current_node` is NOT included.
+#[allow(clippy::too_many_arguments)]
 fn walk_artery(
     graph: &RoadGraph,
     degrees: &[u32],
@@ -247,6 +259,7 @@ fn walk_artery(
     came_from_node: NodeId,
     from_edge: EdgeId,
     visited_edges: &mut [bool],
+    visited_nodes: &mut [bool],
     road_type: RoadType,
 ) -> (Vec<NodeId>, Vec<EdgeId>) {
     let mut nodes = Vec::new();
@@ -279,9 +292,14 @@ fn walk_artery(
                 break;
             }
             let Some(ne) = next_edge else { break };
-            visited_edges[ne as usize] = true;
-            edges.push(ne);
             let next_node = graph.opposite(ne, current);
+            // Prevent figure-8: stop if we would revisit a node.
+            if visited_nodes[next_node as usize] {
+                break;
+            }
+            visited_edges[ne as usize] = true;
+            visited_nodes[next_node as usize] = true;
+            edges.push(ne);
             nodes.push(next_node);
             prev_node = current;
             prev_edge = ne;
@@ -308,6 +326,10 @@ fn walk_artery(
                 continue;
             }
             let neighbor = graph.opposite(eid, current);
+            // Skip edges leading to already-visited nodes (figure-8 prevention).
+            if visited_nodes[neighbor as usize] {
+                continue;
+            }
             let dir = (graph.node_pos(neighbor) - graph.node_pos(current)).normalize_or_zero();
             let cos = forward.dot(dir);
             if cos > best_cos {
@@ -317,9 +339,10 @@ fn walk_artery(
         }
 
         let Some(ne) = best_edge else { break };
-        visited_edges[ne as usize] = true;
-        edges.push(ne);
         let next_node = graph.opposite(ne, current);
+        visited_edges[ne as usize] = true;
+        visited_nodes[next_node as usize] = true;
+        edges.push(ne);
         nodes.push(next_node);
         prev_node = current;
         prev_edge = ne;

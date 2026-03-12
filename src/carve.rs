@@ -163,6 +163,16 @@ pub fn carve_roads(
 
     let half_w = road_width * 0.5;
 
+    // Cache node heights from the unmodified heightmap so that Pass 2
+    // (embankments) uses the same reference heights as Pass 1. Without
+    // this, bilinear interpolation in get_height_at can return different
+    // values after Pass 1 partially flattens surrounding grid cells.
+    let node_heights: Vec<f32> = graph
+        .nodes
+        .iter()
+        .map(|n| heightmap.get_height_at(n.position.x, n.position.y))
+        .collect();
+
     // Track cells that have been set to a road surface height so that
     // the embankment pass does not overwrite them.
     let mut is_road_surface = vec![false; hw * hh];
@@ -173,7 +183,7 @@ pub fn carve_roads(
             continue;
         }
         let (start_pos, end_pos, start_h, end_h, _dir, _length) =
-            match edge_params(graph, edge, heightmap) {
+            match cached_edge_params(graph, edge, &node_heights) {
                 Some(v) => v,
                 None => continue,
             };
@@ -204,7 +214,7 @@ pub fn carve_roads(
             continue;
         }
         let (start_pos, end_pos, start_h, end_h, _dir, _length) =
-            match edge_params(graph, edge, heightmap) {
+            match cached_edge_params(graph, edge, &node_heights) {
                 Some(v) => v,
                 None => continue,
             };
@@ -246,10 +256,12 @@ pub fn carve_roads(
 
 use crate::graph::RoadEdge;
 
-fn edge_params(
+/// Reads node heights from a pre-cached array
+/// instead of sampling the (potentially modified) heightmap.
+fn cached_edge_params(
     graph: &RoadGraph,
     edge: &RoadEdge,
-    heightmap: &HeightMap,
+    node_heights: &[f32],
 ) -> Option<(glam::Vec2, glam::Vec2, f32, f32, glam::Vec2, f32)> {
     let start_pos = graph.nodes[edge.start as usize].position;
     let end_pos = graph.nodes[edge.end as usize].position;
@@ -258,8 +270,8 @@ fn edge_params(
     if length < 1e-6 {
         return None;
     }
-    let start_h = heightmap.get_height_at(start_pos.x, start_pos.y);
-    let end_h = heightmap.get_height_at(end_pos.x, end_pos.y);
+    let start_h = node_heights[edge.start as usize];
+    let end_h = node_heights[edge.end as usize];
     Some((start_pos, end_pos, start_h, end_h, dir, length))
 }
 

@@ -485,17 +485,18 @@ fn extrude_ribbon(
         let next = (i + 1) * 4;
 
         // Right skirt quad: inner=[base+0], outer=[base+1].
+        // Winding produces outward+upward normals on the right side.
         let ri0 = base;
         let ro0 = base + 1;
         let ri1 = next;
         let ro1 = next + 1;
 
         skirts.indices.push(ri0);
-        skirts.indices.push(ri1);
-        skirts.indices.push(ro0);
         skirts.indices.push(ro0);
         skirts.indices.push(ri1);
+        skirts.indices.push(ro0);
         skirts.indices.push(ro1);
+        skirts.indices.push(ri1);
 
         // Left skirt quad: inner=[base+2], outer=[base+3].
         // Winding is reversed so face normal points outward (left).
@@ -505,11 +506,11 @@ fn extrude_ribbon(
         let lo1 = next + 3;
 
         skirts.indices.push(li0);
-        skirts.indices.push(lo0);
         skirts.indices.push(li1);
         skirts.indices.push(lo0);
+        skirts.indices.push(lo0);
+        skirts.indices.push(li1);
         skirts.indices.push(lo1);
-        skirts.indices.push(li1);
     }
 
     (asphalt, skirts)

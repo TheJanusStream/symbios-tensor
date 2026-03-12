@@ -305,10 +305,21 @@ fn trace_streamline(
                         find_crossing(graph, spatial, current_pos, n_pos, current_node, n_id);
                     if let Some((cross_eid, cross_pt)) = crossing {
                         let mid_node = split_or_snap_edge(graph, spatial, cross_eid, cross_pt);
-                        let mid_pos = graph.node_pos(mid_node);
-
-                        let connecting = graph.add_edge(current_node, mid_node, seed.road_type);
-                        spatial.insert_edge(connecting, current_pos, mid_pos);
+                        // split_or_snap_edge may return an existing endpoint;
+                        // guard against creating a duplicate edge.
+                        let already = graph.nodes[current_node as usize]
+                            .edges
+                            .iter()
+                            .any(|&eid| {
+                                let e = &graph.edges[eid as usize];
+                                e.active && (e.start == mid_node || e.end == mid_node)
+                            });
+                        if !already {
+                            let mid_pos = graph.node_pos(mid_node);
+                            let connecting =
+                                graph.add_edge(current_node, mid_node, seed.road_type);
+                            spatial.insert_edge(connecting, current_pos, mid_pos);
+                        }
                     } else {
                         let edge_id = graph.add_edge(current_node, n_id, seed.road_type);
                         spatial.insert_edge(edge_id, current_pos, n_pos);
@@ -336,10 +347,21 @@ fn trace_streamline(
                     find_crossing(graph, spatial, current_pos, mid_pos, current_node, mid_node);
                 if let Some((cross_eid, cross_pt)) = crossing {
                     let cross_mid = split_or_snap_edge(graph, spatial, cross_eid, cross_pt);
-                    let cross_pos = graph.node_pos(cross_mid);
-
-                    let connecting_edge = graph.add_edge(current_node, cross_mid, seed.road_type);
-                    spatial.insert_edge(connecting_edge, current_pos, cross_pos);
+                    // split_or_snap_edge may return an existing endpoint;
+                    // guard against creating a duplicate edge.
+                    let already = graph.nodes[current_node as usize]
+                        .edges
+                        .iter()
+                        .any(|&eid| {
+                            let e = &graph.edges[eid as usize];
+                            e.active && (e.start == cross_mid || e.end == cross_mid)
+                        });
+                    if !already {
+                        let cross_pos = graph.node_pos(cross_mid);
+                        let connecting_edge =
+                            graph.add_edge(current_node, cross_mid, seed.road_type);
+                        spatial.insert_edge(connecting_edge, current_pos, cross_pos);
+                    }
                     // Terminate: we hit a crossing before reaching the
                     // snapped edge, so continuing from mid_node would
                     // leave a gap in the graph.
