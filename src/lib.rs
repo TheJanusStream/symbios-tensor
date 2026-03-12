@@ -29,6 +29,9 @@
 //! 5. **Road pruning** — [`prune_unused_roads`] optionally removes roads that
 //!    do not serve any building lot, keeping only the minimal connected
 //!    sub-network via Dijkstra-based Steiner tree construction.
+//! 6. **3D mesh generation** — [`generate_road_meshes`] produces engine-agnostic
+//!    [`ProceduralMesh`] vertex buffers for intersection hubs (flat N-gon
+//!    polygons) and street ribbons (Catmull-Rom-smoothed extruded strips).
 //!
 //! # Quick start
 //!
@@ -55,6 +58,11 @@
 //!
 //! // 5. (Optional) Prune roads that don't serve any lot
 //! prune_unused_roads(&mut graph, &lots);
+//!
+//! // 6. Generate 3D road meshes
+//! let meshes = generate_road_meshes(&graph, &hm, &RoadMeshConfig::default());
+//! // meshes.hubs — intersection polygons
+//! // meshes.ribbons — street ribbon strips
 //! ```
 
 pub mod carve;

@@ -14,11 +14,18 @@ use symbios_ground::HeightMap;
 use crate::graph::{NodeId, RoadGraph, RoadType};
 
 /// Engine-agnostic mesh container.
+///
+/// Vertices use a Y-up coordinate system: `[x, y, z]` where Y is the
+/// world-space height sampled from the [`HeightMap`].
 #[derive(Debug, Clone, Default)]
 pub struct ProceduralMesh {
+    /// Vertex positions as `[x, y, z]` (Y-up).
     pub vertices: Vec<[f32; 3]>,
+    /// Per-vertex normals (currently always `[0, 1, 0]` — flat upward).
     pub normals: Vec<[f32; 3]>,
+    /// Per-vertex texture coordinates `[u, v]`.
     pub uvs: Vec<[f32; 2]>,
+    /// Triangle indices into the vertex/normal/uv arrays.
     pub indices: Vec<u32>,
 }
 

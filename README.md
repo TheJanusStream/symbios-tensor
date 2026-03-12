@@ -43,6 +43,11 @@ field falls back to an axis-aligned Manhattan grid.
    to keep only the minimal connected sub-network that reaches every lot's
    frontage edge, preferring major roads over minor ones.
 
+6. **3D mesh generation** (`generate_road_meshes`) — Produces engine-agnostic
+   `ProceduralMesh` vertex buffers for intersection hubs (flat N-gon polygons)
+   and street ribbons (Catmull-Rom-smoothed extruded strips), sampled against
+   the heightmap for correct elevation.
+
 ## Quick start
 
 ```rust
@@ -68,6 +73,11 @@ carve_lots(&lots, &mut hm, 2.0, Some(&road_mask));
 
 // 5. (Optional) Prune roads that don't serve any lot
 prune_unused_roads(&mut graph, &lots);
+
+// 6. Generate 3D road meshes
+let meshes = generate_road_meshes(&graph, &hm, &RoadMeshConfig::default());
+// meshes.hubs — intersection polygons
+// meshes.ribbons — street ribbon strips
 ```
 
 ## Configuration
@@ -96,6 +106,17 @@ prune_unused_roads(&mut graph, &lots);
 | `min_width` | `6.0` | Minimum building width (along street) |
 | `min_depth` | `6.0` | Minimum building depth (perpendicular to street) |
 
+### `RoadMeshConfig`
+
+| Field | Default | Description |
+|---|---|---|
+| `major_half_width` | `3.0` | Half-width of major roads (world units) |
+| `minor_half_width` | `2.0` | Half-width of minor roads (world units) |
+| `hub_sides` | `8` | Number of sides for hub polygons (e.g. 8 = octagon) |
+| `depth_bias` | `0.05` | Vertices are raised above terrain by this amount to prevent z-fighting |
+| `texture_scale` | `0.1` | UV texture scale: world units per texture repeat |
+| `spline_subdivisions` | `8` | Catmull-Rom subdivisions per graph edge for ribbon smoothing |
+
 ## Module overview
 
 | Module | Purpose |
@@ -109,6 +130,7 @@ prune_unused_roads(&mut graph, &lots);
 | `lots` | Recursive subdivision, frontage detection, inscribed box, setbacks |
 | `carve` | Heightmap flattening for roads and building foundations |
 | `prune` | Steiner-tree road pruning to remove unused roads |
+| `roads_3d` | Engine-agnostic 3D mesh generation (intersection hubs + street ribbons) |
 
 ## Dependencies
 
