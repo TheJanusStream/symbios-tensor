@@ -221,6 +221,10 @@ fn extract_chains(graph: &RoadGraph, degrees: &[u32]) -> Vec<Chain> {
         let mut chain_nodes = Vec::new();
         let road_type = edge.road_type;
 
+        // Mark the seed edge as visited *before* walking so that pure
+        // cycles (every node degree-2) cannot loop back through it.
+        visited_edges[eid] = true;
+
         // Walk backwards from edge.start as far as degree-2 nodes go.
         let head = walk_chain(
             graph,
@@ -233,7 +237,6 @@ fn extract_chains(graph: &RoadGraph, degrees: &[u32]) -> Vec<Chain> {
         head.into_iter().rev().for_each(|n| chain_nodes.push(n));
 
         // Now walk forward from edge.end.
-        visited_edges[eid] = true;
         chain_nodes.push(edge.start);
         chain_nodes.push(edge.end);
 
@@ -367,6 +370,11 @@ fn smooth_chain(points: &[Vec2], subdivisions: u32) -> Vec<Vec2> {
     if points.len() < 2 {
         return points.to_vec();
     }
+
+    // Guard against zero subdivisions which would cause NaN from 0.0/0.0
+    // division, poisoning all downstream vertex positions.
+    let subdivisions = subdivisions.max(1);
+
     if points.len() == 2 {
         // Just linearly subdivide.
         let mut result = Vec::with_capacity(subdivisions as usize + 1);

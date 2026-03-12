@@ -17,6 +17,8 @@ use crate::graph::{CityBlock, EdgeId, NodeId, RoadGraph};
 /// them as bounded interior blocks. The unbounded exterior face winds CCW
 /// and is filtered out by the area sign check.
 pub fn extract_blocks(graph: &mut RoadGraph) {
+    graph.blocks.clear();
+
     let mut visited_half_edges: std::collections::HashSet<(NodeId, NodeId)> =
         std::collections::HashSet::new();
 
