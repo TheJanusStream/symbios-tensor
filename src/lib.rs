@@ -63,6 +63,7 @@ pub mod graph;
 pub mod lots;
 pub mod polygons;
 pub mod prune;
+pub mod roads_3d;
 pub mod spatial;
 pub mod tensor;
 pub mod tracer;
@@ -72,5 +73,6 @@ pub use graph::{BlockId, CityBlock, EdgeId, NodeId, RoadEdge, RoadGraph, RoadNod
 pub use lots::{BuildingLot, LotConfig, extract_lots};
 pub use polygons::{block_centroid, extract_blocks};
 pub use prune::prune_unused_roads;
+pub use roads_3d::{ProceduralMesh, RoadMeshConfig, RoadMeshes, generate_road_meshes};
 pub use tensor::TensorField;
 pub use tracer::{TensorConfig, TensorError, generate_roads};

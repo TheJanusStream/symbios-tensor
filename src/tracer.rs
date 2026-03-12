@@ -93,7 +93,10 @@ pub fn generate_roads(
 ) -> Result<RoadGraph, TensorError> {
     if !config.step_size.is_finite() || config.step_size <= 0.0 {
         return Err(TensorError {
-            message: format!("step_size must be finite and positive, got {}", config.step_size),
+            message: format!(
+                "step_size must be finite and positive, got {}",
+                config.step_size
+            ),
         });
     }
     if !config.major_road_dist.is_finite() || config.major_road_dist <= 0.0 {
@@ -114,7 +117,10 @@ pub fn generate_roads(
     }
     if !config.snap_radius.is_finite() || config.snap_radius <= 0.0 {
         return Err(TensorError {
-            message: format!("snap_radius must be finite and positive, got {}", config.snap_radius),
+            message: format!(
+                "snap_radius must be finite and positive, got {}",
+                config.snap_radius
+            ),
         });
     }
 
@@ -295,7 +301,8 @@ fn trace_streamline(
                     // position, rotating the committed segment so it crosses
                     // an edge the original ray missed. Re-check the adjusted
                     // trajectory for crossings to maintain planarity.
-                    let crossing = find_crossing(graph, spatial, current_pos, n_pos, current_node, n_id);
+                    let crossing =
+                        find_crossing(graph, spatial, current_pos, n_pos, current_node, n_id);
                     if let Some((cross_eid, cross_pt)) = crossing {
                         let ce = &graph.edges[cross_eid as usize];
                         let ce_start = graph.node_pos(ce.start);
@@ -307,8 +314,7 @@ fn trace_streamline(
                         spatial.insert_edge(ea, ce_start, cross_pt);
                         spatial.insert_edge(eb, cross_pt, ce_end);
 
-                        let connecting =
-                            graph.add_edge(current_node, mid_node, seed.road_type);
+                        let connecting = graph.add_edge(current_node, mid_node, seed.road_type);
                         spatial.insert_edge(connecting, current_pos, cross_pt);
                     } else {
                         let edge_id = graph.add_edge(current_node, n_id, seed.road_type);

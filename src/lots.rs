@@ -713,11 +713,11 @@ mod tests {
         //
         // CW winding: frontage along bottom edge (y=0), interior upward.
         let poly = vec![
-            Vec2::new(0.0, 0.0),   // 0 — frontage start
-            Vec2::new(0.0, 5.0),   // 1
-            Vec2::new(5.0, 2.0),   // 2 — notch vertex
-            Vec2::new(10.0, 5.0),  // 3
-            Vec2::new(10.0, 0.0),  // 4 — frontage end
+            Vec2::new(0.0, 0.0),  // 0 — frontage start
+            Vec2::new(0.0, 5.0),  // 1
+            Vec2::new(5.0, 2.0),  // 2 — notch vertex
+            Vec2::new(10.0, 5.0), // 3
+            Vec2::new(10.0, 0.0), // 4 — frontage end
         ];
         let frontage_idx = 4; // edge 4→0: (10,0)→(0,0)
         let result = inscribed_box(&poly, frontage_idx);
