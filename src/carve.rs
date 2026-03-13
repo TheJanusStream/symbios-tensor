@@ -163,14 +163,13 @@ pub fn carve_roads(
 
     let half_w = road_width * 0.5;
 
-    // Cache node heights from the unmodified heightmap so that Pass 2
-    // (embankments) uses the same reference heights as Pass 1. Without
-    // this, bilinear interpolation in get_height_at can return different
-    // values after Pass 1 partially flattens surrounding grid cells.
+    // Use the sovereign node elevations (smoothed by rationalization) as the
+    // reference heights for carving. This makes roads slice through hills
+    // and bridge dips rather than hugging every terrain bump.
     let node_heights: Vec<f32> = graph
         .nodes
         .iter()
-        .map(|n| heightmap.get_height_at(n.position.x, n.position.y))
+        .map(|n| n.elevation)
         .collect();
 
     // Track cells that have been set to a road surface height so that

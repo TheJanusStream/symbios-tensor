@@ -49,6 +49,10 @@ pub struct TensorConfig {
     pub snap_radius: f32,
     /// Maximum number of integration steps per trace before it is abandoned.
     pub max_trace_steps: u32,
+    /// Momentum factor for the tracer direction (range `0.0` to `0.99`).
+    /// Higher values resist sharp direction changes caused by high-frequency
+    /// terrain noise, producing smoother, less zig-zaggy roads.
+    pub tracer_inertia: f32,
     /// Absolute world-space Y coordinate for the water plane.
     /// Terrain at or below this height is treated as underwater.
     /// Defaults to [`f32::NEG_INFINITY`] (no water).
@@ -64,6 +68,7 @@ impl Default for TensorConfig {
             minor_road_dist: 15.0,
             snap_radius: 4.0,
             max_trace_steps: 300,
+            tracer_inertia: 0.8,
             water_level: f32::NEG_INFINITY,
         }
     }
@@ -156,7 +161,8 @@ pub fn generate_roads(
             let (major, minor) = field.sample(pos.x, pos.y);
 
             // Create a shared starting node for all traces from this seed
-            let shared_node = graph.add_node(pos);
+            let elev = heightmap.get_height_at(pos.x, pos.y);
+            let shared_node = graph.add_node_with_elevation(pos, elev);
             spatial.insert_node(shared_node, pos);
 
             // Trace both directions along each axis to form full through-lines
@@ -223,7 +229,8 @@ fn trace_streamline(
     let start_node = match seed.existing_node {
         Some(id) => id,
         None => {
-            let id = graph.add_node(seed.position);
+            let elev = field.heightmap.get_height_at(seed.position.x, seed.position.y);
+            let id = graph.add_node_with_elevation(seed.position, elev);
             spatial.insert_node(id, seed.position);
             id
         }
@@ -253,7 +260,12 @@ fn trace_streamline(
         };
         let k2 = if k2.dot(k1) < 0.0 { -k2 } else { k2 };
 
-        dir = k2;
+        // Blend with previous direction for momentum (anti-zig-zag).
+        let inertia = config.tracer_inertia.clamp(0.0, 0.99);
+        dir = (dir * inertia + k2 * (1.0 - inertia)).normalize_or_zero();
+        if dir.length_squared() < 1e-12 {
+            break;
+        }
         let proposed = current_pos + dir * config.step_size;
 
         // Bounds check (NaN coordinates fail is_finite and abort the trace)
@@ -281,7 +293,8 @@ fn trace_streamline(
             current_node,
         ) {
             TraceResult::Clear(pos) => {
-                let new_node = graph.add_node(pos);
+                let elev = field.heightmap.get_height_at(pos.x, pos.y);
+                let new_node = graph.add_node_with_elevation(pos, elev);
                 spatial.insert_node(new_node, pos);
                 let edge_id = graph.add_edge(current_node, new_node, seed.road_type);
                 spatial.insert_edge(edge_id, current_pos, pos);

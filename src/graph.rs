@@ -30,6 +30,9 @@ pub enum RoadType {
 pub struct RoadNode {
     /// World-space position (X, Z in a Y-up coordinate system).
     pub position: Vec2,
+    /// World-space Y elevation (height above sea level).
+    /// Set from the heightmap during tracing, then smoothed by rationalization.
+    pub elevation: f32,
     /// Indices of all edges incident to this node (both active and inactive).
     pub edges: Vec<EdgeId>,
 }
@@ -82,6 +85,18 @@ impl RoadGraph {
         let id = self.nodes.len() as NodeId;
         self.nodes.push(RoadNode {
             position,
+            elevation: 0.0,
+            edges: Vec::new(),
+        });
+        id
+    }
+
+    /// Inserts a new node with an explicit elevation and returns its [`NodeId`].
+    pub fn add_node_with_elevation(&mut self, position: Vec2, elevation: f32) -> NodeId {
+        let id = self.nodes.len() as NodeId;
+        self.nodes.push(RoadNode {
+            position,
+            elevation,
             edges: Vec::new(),
         });
         id
@@ -118,7 +133,20 @@ impl RoadGraph {
         self.nodes[start as usize].edges.retain(|&e| e != edge_id);
         self.nodes[end as usize].edges.retain(|&e| e != edge_id);
 
-        let mid = self.add_node(split_pos);
+        // Interpolate elevation from the edge endpoints based on position.
+        let start_pos = self.nodes[start as usize].position;
+        let end_pos = self.nodes[end as usize].position;
+        let seg_len = (end_pos - start_pos).length();
+        let t = if seg_len > 1e-6 {
+            ((split_pos - start_pos).length() / seg_len).clamp(0.0, 1.0)
+        } else {
+            0.5
+        };
+        let start_elev = self.nodes[start as usize].elevation;
+        let end_elev = self.nodes[end as usize].elevation;
+        let mid_elev = start_elev + t * (end_elev - start_elev);
+
+        let mid = self.add_node_with_elevation(split_pos, mid_elev);
         let ea = self.add_edge(start, mid, road_type);
         let eb = self.add_edge(mid, end, road_type);
 

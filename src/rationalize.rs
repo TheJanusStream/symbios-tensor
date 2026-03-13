@@ -13,6 +13,7 @@
 
 use glam::Vec2;
 use serde::{Deserialize, Serialize};
+use symbios_ground::HeightMap;
 
 use crate::geometry::closest_point_on_segment;
 use crate::graph::{EdgeId, NodeId, RoadGraph, RoadType};
@@ -31,6 +32,12 @@ pub struct RationalizeConfig {
     pub minor_fillet_radius: f32,
     /// Number of line segments used to approximate each fillet arc.
     pub fillet_segments: u32,
+    /// Number of box-blur passes applied to the elevation profile of each
+    /// road chain. Higher values produce smoother vertical curves. 0 disables.
+    pub elevation_smooth_passes: u32,
+    /// Maximum allowed slope (grade) between adjacent nodes, expressed as a
+    /// fraction (e.g. 0.15 = 15% grade). 0.0 disables clamping.
+    pub max_grade: f32,
 }
 
 impl Default for RationalizeConfig {
@@ -41,6 +48,8 @@ impl Default for RationalizeConfig {
             major_fillet_radius: 20.0,
             minor_fillet_radius: 10.0,
             fillet_segments: 6,
+            elevation_smooth_passes: 3,
+            max_grade: 0.15,
         }
     }
 }
@@ -58,7 +67,7 @@ impl Default for RationalizeConfig {
 ///
 /// **Phase 2 — Residual chains:** Any edges not consumed by an artery are
 /// processed with the original chain-based RDP + fillet pass.
-pub fn rationalize_graph(graph: &mut RoadGraph, config: &RationalizeConfig) {
+pub fn rationalize_graph(graph: &mut RoadGraph, hm: &HeightMap, config: &RationalizeConfig) {
     // --- Phase 1: Artery rationalization ---
     // Process Major arteries first (avenues get priority), then Minor.
     // Only arteries with 3+ nodes (2+ edges) benefit from global
@@ -73,7 +82,7 @@ pub fn rationalize_graph(graph: &mut RoadGraph, config: &RationalizeConfig) {
             if artery.nodes.len() < 3 {
                 continue;
             }
-            rationalize_artery(graph, artery.road_type, &artery.nodes, &artery.edges, config);
+            rationalize_artery(graph, hm, artery.road_type, &artery.nodes, &artery.edges, config);
         }
     }
 
@@ -83,7 +92,7 @@ pub fn rationalize_graph(graph: &mut RoadGraph, config: &RationalizeConfig) {
     let chains = extract_chains(graph, &degrees);
 
     for chain in &chains {
-        rationalize_polyline(graph, chain.road_type, &chain.nodes, &chain.edges, config);
+        rationalize_polyline(graph, hm, chain.road_type, &chain.nodes, &chain.edges, config);
     }
 }
 
@@ -91,6 +100,7 @@ pub fn rationalize_graph(graph: &mut RoadGraph, config: &RationalizeConfig) {
 /// geometry, and reconnects severed side-streets.
 fn rationalize_artery(
     graph: &mut RoadGraph,
+    hm: &HeightMap,
     road_type: RoadType,
     nodes: &[NodeId],
     edges: &[EdgeId],
@@ -114,6 +124,9 @@ fn rationalize_artery(
     if smoothed.len() < 2 {
         return;
     }
+
+    // Compute smoothed elevations for the new polyline.
+    let elevations = smooth_elevations(&smoothed, hm, config);
 
     // 2. Collect junction nodes along this artery that have side-street
     //    connections (edges of a *different* type, or same-type edges not
@@ -146,10 +159,10 @@ fn rationalize_artery(
         graph.edges[eid as usize].active = false;
     }
 
-    // 4. Inject new smoothed geometry.
+    // 4. Inject new smoothed geometry with elevation data.
     let first_node = nodes[0];
     let last_node = *nodes.last().unwrap();
-    let new_edge_ids = inject_polyline(graph, road_type, first_node, last_node, &smoothed);
+    let new_edge_ids = inject_polyline(graph, road_type, first_node, last_node, &smoothed, &elevations);
 
     // 5. Reconnect severed side-streets.
     // For each severed (old_artery_node, side_edge), find the closest point
@@ -160,6 +173,7 @@ fn rationalize_artery(
 /// Rationalizes a simple chain of degree-2 nodes (the original algorithm).
 fn rationalize_polyline(
     graph: &mut RoadGraph,
+    hm: &HeightMap,
     road_type: RoadType,
     nodes: &[NodeId],
     edges: &[EdgeId],
@@ -184,33 +198,40 @@ fn rationalize_polyline(
         return;
     }
 
+    let elevations = smooth_elevations(&smoothed, hm, config);
+
     for &eid in edges {
         graph.edges[eid as usize].active = false;
     }
 
     let first_node = nodes[0];
     let last_node = *nodes.last().unwrap();
-    inject_polyline(graph, road_type, first_node, last_node, &smoothed);
+    inject_polyline(graph, road_type, first_node, last_node, &smoothed, &elevations);
 }
 
 /// Injects a smoothed polyline into the graph, reusing `first_node` and
-/// `last_node` as endpoints. Returns the edge IDs of the new edges.
+/// `last_node` as endpoints. Elevations are assigned to each node.
+/// Returns the edge IDs of the new edges.
 fn inject_polyline(
     graph: &mut RoadGraph,
     road_type: RoadType,
     first_node: NodeId,
     last_node: NodeId,
     smoothed: &[Vec2],
+    elevations: &[f32],
 ) -> Vec<EdgeId> {
     let mut new_edges = Vec::with_capacity(smoothed.len());
     let mut prev_node = first_node;
     for (i, &pos) in smoothed.iter().enumerate() {
         let current_node = if i == 0 {
+            // Update first node's elevation to the smoothed value.
+            graph.nodes[first_node as usize].elevation = elevations[i];
             first_node
         } else if i == smoothed.len() - 1 {
+            graph.nodes[last_node as usize].elevation = elevations[i];
             last_node
         } else {
-            graph.add_node(pos)
+            graph.add_node_with_elevation(pos, elevations[i])
         };
 
         if i > 0 {
@@ -220,6 +241,54 @@ fn inject_polyline(
         prev_node = current_node;
     }
     new_edges
+}
+
+// ---------------------------------------------------------------------------
+// Elevation smoothing
+// ---------------------------------------------------------------------------
+
+/// Samples raw terrain heights for each point, then applies a 1D box blur
+/// and optional max-grade clamping to produce a smooth vertical profile.
+fn smooth_elevations(points: &[Vec2], hm: &HeightMap, config: &RationalizeConfig) -> Vec<f32> {
+    let n = points.len();
+    let mut elevs: Vec<f32> = points
+        .iter()
+        .map(|p| hm.get_height_at(p.x, p.y))
+        .collect();
+
+    // Box blur passes.
+    for _ in 0..config.elevation_smooth_passes {
+        let prev = elevs.clone();
+        for i in 1..n - 1 {
+            elevs[i] = (prev[i - 1] + prev[i] + prev[i + 1]) / 3.0;
+        }
+    }
+
+    // Max grade clamping: walk forward then backward, clamping slope.
+    if config.max_grade > 0.0 {
+        // Forward pass.
+        for i in 1..n {
+            let dist = (points[i] - points[i - 1]).length();
+            let max_rise = dist * config.max_grade;
+            if elevs[i] > elevs[i - 1] + max_rise {
+                elevs[i] = elevs[i - 1] + max_rise;
+            } else if elevs[i] < elevs[i - 1] - max_rise {
+                elevs[i] = elevs[i - 1] - max_rise;
+            }
+        }
+        // Backward pass.
+        for i in (0..n - 1).rev() {
+            let dist = (points[i + 1] - points[i]).length();
+            let max_rise = dist * config.max_grade;
+            if elevs[i] > elevs[i + 1] + max_rise {
+                elevs[i] = elevs[i + 1] + max_rise;
+            } else if elevs[i] < elevs[i + 1] - max_rise {
+                elevs[i] = elevs[i + 1] - max_rise;
+            }
+        }
+    }
+
+    elevs
 }
 
 /// Reconnects side-street edges that were severed when artery nodes moved.
@@ -595,9 +664,12 @@ mod tests {
             major_fillet_radius: 0.0,
             minor_fillet_radius: 0.0,
             fillet_segments: 4,
+            elevation_smooth_passes: 0,
+            max_grade: 0.0,
         };
 
-        rationalize_graph(&mut g, &config);
+        let hm = symbios_ground::HeightMap::new(64, 64, 2.0);
+        rationalize_graph(&mut g, &hm, &config);
 
         // Verify structural properties after rationalization:
         // 1. The graph should have a connected active sub-graph.
@@ -664,9 +736,12 @@ mod tests {
             major_fillet_radius: 0.0,
             minor_fillet_radius: 0.0,
             fillet_segments: 4,
+            elevation_smooth_passes: 0,
+            max_grade: 0.0,
         };
 
-        rationalize_graph(&mut g, &config);
+        let hm = symbios_ground::HeightMap::new(64, 64, 2.0);
+        rationalize_graph(&mut g, &hm, &config);
 
         // The original Major avenue edges should be deactivated.
         assert!(!g.edges[0].active, "Major A→B should be deactivated");

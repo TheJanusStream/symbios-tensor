@@ -58,6 +58,9 @@ pub struct RoadMeshConfig {
     /// Legacy: subdivisions per graph edge for Catmull-Rom spline ribbons.
     /// Ignored when the graph has been rationalized (geometry is already smooth).
     pub spline_subdivisions: u32,
+    /// Extra radius added to intersection hubs beyond the road half-width,
+    /// creating a wider turning zone (world units).
+    pub curb_radius: f32,
     /// Embankment skirt configuration.
     pub skirt: SkirtConfig,
 }
@@ -71,6 +74,7 @@ impl Default for RoadMeshConfig {
             depth_bias: 0.05,
             texture_scale: 0.1,
             spline_subdivisions: 8,
+            curb_radius: 2.0,
             skirt: SkirtConfig::default(),
         }
     }
@@ -128,8 +132,9 @@ pub fn generate_road_meshes(
         if deg == 2 {
             continue;
         }
-        let hub = generate_hub(graph, node_id as NodeId, deg, heightmap, config);
+        let (hub, hub_skirt) = generate_hub(graph, node_id as NodeId, deg, heightmap, config);
         meshes.hubs.append(&hub);
+        meshes.skirts.append(&hub_skirt);
     }
 
     // --- Ribbons (chains of degree-2 nodes) ---
@@ -161,11 +166,11 @@ fn generate_hub(
     _degree: u32,
     heightmap: &HeightMap,
     config: &RoadMeshConfig,
-) -> ProceduralMesh {
+) -> (ProceduralMesh, ProceduralMesh) {
     let center = graph.node_pos(node_id);
     let node = &graph.nodes[node_id as usize];
 
-    // Find max half-width of all connecting active edges.
+    // Find max half-width of all connecting active edges + curb radius.
     let mut radius = config.minor_half_width;
     for &eid in &node.edges {
         let edge = &graph.edges[eid as usize];
@@ -180,10 +185,11 @@ fn generate_hub(
             radius = hw;
         }
     }
+    radius += config.curb_radius;
 
     let sides = config.hub_sides.max(3);
-    // Flat hub: all vertices share the centerline height.
-    let center_y = heightmap.get_height_at(center.x, center.y) + config.depth_bias;
+    // Flat hub: use the sovereign node elevation (smoothed by rationalization).
+    let center_y = node.elevation + config.depth_bias;
 
     let mut mesh = ProceduralMesh::default();
 
@@ -197,6 +203,7 @@ fn generate_hub(
 
     // Perimeter vertices — all at centerline height for a flat intersection.
     let angle_step = std::f32::consts::TAU / sides as f32;
+    let mut perimeter_pts = Vec::with_capacity(sides as usize);
     for i in 0..sides {
         let angle = angle_step * i as f32;
         let (sin, cos) = angle.sin_cos();
@@ -207,6 +214,7 @@ fn generate_hub(
         mesh.normals.push([0.0, 1.0, 0.0]);
         mesh.uvs
             .push([px * config.texture_scale, pz * config.texture_scale]);
+        perimeter_pts.push((px, pz));
     }
 
     // Fan triangles: center(0) + perimeter.
@@ -218,7 +226,53 @@ fn generate_hub(
         mesh.indices.push(a);
     }
 
-    mesh
+    // --- Hub skirt: ring of quads extruding outward from perimeter ---
+    let skirt_w = config.skirt.width;
+    let bury = config.skirt.bury_depth;
+    let mut skirt = ProceduralMesh::default();
+
+    for &(px, pz) in &perimeter_pts {
+        // Direction from center outward (for extrusion).
+        let dx = px - center.x;
+        let dz = pz - center.y;
+        let len = (dx * dx + dz * dz).sqrt().max(1e-6);
+        let nx = dx / len;
+        let nz = dz / len;
+
+        let outer_x = px + nx * skirt_w;
+        let outer_z = pz + nz * skirt_w;
+        let outer_y = heightmap.get_height_at(outer_x, outer_z) - bury;
+
+        // Inner vertex (at road edge, hub height).
+        skirt.vertices.push([px, center_y, pz]);
+        skirt.normals.push([0.0, 1.0, 0.0]);
+        skirt.uvs.push([px * config.texture_scale, pz * config.texture_scale]);
+
+        // Outer vertex (skirt width outward, terrain - bury).
+        skirt.vertices.push([outer_x, outer_y, outer_z]);
+        skirt.normals.push([0.0, 1.0, 0.0]);
+        skirt.uvs.push([outer_x * config.texture_scale, outer_z * config.texture_scale]);
+    }
+
+    // Skirt index buffer: quads connecting adjacent perimeter edges.
+    for i in 0..sides {
+        let next = (i + 1) % sides;
+        let i0 = i * 2;       // inner current
+        let o0 = i * 2 + 1;   // outer current
+        let i1 = next * 2;    // inner next
+        let o1 = next * 2 + 1; // outer next
+
+        // Two triangles per quad, winding outward.
+        skirt.indices.push(i0);
+        skirt.indices.push(o0);
+        skirt.indices.push(i1);
+
+        skirt.indices.push(o0);
+        skirt.indices.push(o1);
+        skirt.indices.push(i1);
+    }
+
+    (mesh, skirt)
 }
 
 // ---------------------------------------------------------------------------
@@ -257,9 +311,9 @@ fn generate_ribbon(
         RoadType::Minor => config.minor_half_width,
     };
 
-    // Gather 2D positions along the chain. When the graph has been
-    // rationalized the geometry is already smooth — no spline needed.
+    // Gather 2D positions and sovereign elevations along the chain.
     let smooth_pts: Vec<Vec2> = chain.nodes.iter().map(|&nid| graph.node_pos(nid)).collect();
+    let node_elevs: Vec<f32> = chain.nodes.iter().map(|&nid| graph.nodes[nid as usize].elevation).collect();
     if smooth_pts.len() < 2 {
         return (ProceduralMesh::default(), ProceduralMesh::default());
     }
@@ -270,13 +324,15 @@ fn generate_ribbon(
     let start_radius = hub_radius_for_node(graph, first_node, degrees, config);
     let end_radius = hub_radius_for_node(graph, last_node, degrees, config);
 
-    let truncated = truncate_polyline(&smooth_pts, start_radius, end_radius);
+    let (truncated, truncated_elevs) = truncate_polyline_with_elevations(
+        &smooth_pts, &node_elevs, start_radius, end_radius,
+    );
     if truncated.len() < 2 {
         return (ProceduralMesh::default(), ProceduralMesh::default());
     }
 
-    // Extrude flat asphalt ribbon + embankment skirts.
-    extrude_ribbon(&truncated, half_width, heightmap, config)
+    // Extrude asphalt ribbon (sovereign elevation) + embankment skirts (heightmap).
+    extrude_ribbon(&truncated, &truncated_elevs, half_width, heightmap, config)
 }
 
 /// Returns the hub radius for a node, or 0.0 if the node is degree-2 (no hub).
@@ -290,7 +346,7 @@ fn hub_radius_for_node(
     if deg == 2 {
         return 0.0;
     }
-    // Same logic as hub generation: max half-width of connecting edges.
+    // Same logic as hub generation: max half-width of connecting edges + curb radius.
     let node = &graph.nodes[node_id as usize];
     let mut radius = config.minor_half_width;
     for &eid in &node.edges {
@@ -306,16 +362,21 @@ fn hub_radius_for_node(
             radius = hw;
         }
     }
-    radius
+    radius + config.curb_radius
 }
 
-/// Truncates a polyline by removing length from the start and end.
-fn truncate_polyline(points: &[Vec2], start_trim: f32, end_trim: f32) -> Vec<Vec2> {
+/// Truncates a polyline and its associated elevations by removing length
+/// from the start and end, interpolating elevations at the cut points.
+fn truncate_polyline_with_elevations(
+    points: &[Vec2],
+    elevations: &[f32],
+    start_trim: f32,
+    end_trim: f32,
+) -> (Vec<Vec2>, Vec<f32>) {
     if points.len() < 2 {
-        return points.to_vec();
+        return (points.to_vec(), elevations.to_vec());
     }
 
-    // Compute cumulative arc lengths.
     let mut arc_lengths = Vec::with_capacity(points.len());
     arc_lengths.push(0.0f32);
     for i in 1..points.len() {
@@ -327,25 +388,44 @@ fn truncate_polyline(points: &[Vec2], start_trim: f32, end_trim: f32) -> Vec<Vec
     let t_start = start_trim;
     let t_end = total - end_trim;
     if t_start >= t_end {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     }
 
-    let mut result = Vec::new();
+    let mut result_pts = Vec::new();
+    let mut result_elevs = Vec::new();
 
-    // Find start point.
-    result.push(point_at_arc_length(points, &arc_lengths, t_start));
+    // Start point.
+    result_pts.push(point_at_arc_length(points, &arc_lengths, t_start));
+    result_elevs.push(elevation_at_arc_length(elevations, &arc_lengths, t_start));
 
-    // Add interior points.
+    // Interior points.
     for i in 1..points.len() - 1 {
         if arc_lengths[i] > t_start && arc_lengths[i] < t_end {
-            result.push(points[i]);
+            result_pts.push(points[i]);
+            result_elevs.push(elevations[i]);
         }
     }
 
-    // Find end point.
-    result.push(point_at_arc_length(points, &arc_lengths, t_end));
+    // End point.
+    result_pts.push(point_at_arc_length(points, &arc_lengths, t_end));
+    result_elevs.push(elevation_at_arc_length(elevations, &arc_lengths, t_end));
 
-    result
+    (result_pts, result_elevs)
+}
+
+/// Returns the interpolated elevation at a given arc length along a polyline.
+fn elevation_at_arc_length(elevations: &[f32], arc_lengths: &[f32], target: f32) -> f32 {
+    for i in 1..elevations.len() {
+        if arc_lengths[i] >= target {
+            let seg_len = arc_lengths[i] - arc_lengths[i - 1];
+            if seg_len < 1e-6 {
+                return elevations[i];
+            }
+            let t = (target - arc_lengths[i - 1]) / seg_len;
+            return elevations[i - 1] + t * (elevations[i] - elevations[i - 1]);
+        }
+    }
+    *elevations.last().unwrap()
 }
 
 /// Returns the 2D point at a given arc length along a polyline.
@@ -374,6 +454,7 @@ fn point_at_arc_length(points: &[Vec2], arc_lengths: &[f32], target: f32) -> Vec
 /// creating a smooth cut-and-fill embankment.
 fn extrude_ribbon(
     points: &[Vec2],
+    elevations: &[f32],
     half_width: f32,
     heightmap: &HeightMap,
     config: &RoadMeshConfig,
@@ -415,8 +496,8 @@ fn extrude_ribbon(
         let left_pt = points[i] - right * half_width;
         let right_pt = points[i] + right * half_width;
 
-        // Centerline height — shared by both asphalt edges.
-        let center_y = heightmap.get_height_at(points[i].x, points[i].y) + config.depth_bias;
+        // Centerline height — sovereign elevation from rationalized graph.
+        let center_y = elevations[i] + config.depth_bias;
 
         // Asphalt vertices: right (idx 2i), left (idx 2i+1).
         asphalt.vertices.push([right_pt.x, center_y, right_pt.y]);
@@ -556,10 +637,14 @@ mod tests {
         let degrees = compute_active_degrees(&g);
 
         // Center node has degree 4 → hub.
-        let hub = generate_hub(&g, 0, degrees[0], &hm, &config);
+        let (hub, hub_skirt) = generate_hub(&g, 0, degrees[0], &hm, &config);
         // 1 center + hub_sides perimeter vertices.
         assert_eq!(hub.vertices.len(), (1 + config.hub_sides) as usize);
         assert_eq!(hub.indices.len(), (config.hub_sides * 3) as usize);
+        // Skirt: 2 vertices per perimeter side (inner + outer).
+        assert_eq!(hub_skirt.vertices.len(), (config.hub_sides * 2) as usize);
+        // 2 triangles per quad = 6 indices per side.
+        assert_eq!(hub_skirt.indices.len(), (config.hub_sides * 6) as usize);
     }
 
     #[test]
@@ -589,12 +674,16 @@ mod tests {
             Vec2::new(10.0, 0.0),
             Vec2::new(20.0, 0.0),
         ];
-        let truncated = truncate_polyline(&pts, 3.0, 3.0);
+        let elevs = vec![0.0, 5.0, 10.0];
+        let (truncated, trunc_elevs) = truncate_polyline_with_elevations(&pts, &elevs, 3.0, 3.0);
         assert!(!truncated.is_empty());
         // First point should be at x≈3.
         assert!((truncated[0].x - 3.0).abs() < 1e-4);
         // Last point should be at x≈17.
         assert!((truncated.last().unwrap().x - 17.0).abs() < 1e-4);
+        // Elevations should be interpolated: at x=3 → 1.5, at x=17 → 8.5.
+        assert!((trunc_elevs[0] - 1.5).abs() < 1e-4);
+        assert!((*trunc_elevs.last().unwrap() - 8.5).abs() < 1e-4);
     }
 
     #[test]
