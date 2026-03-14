@@ -12,26 +12,33 @@
 //! 1. **Road generation** — [`generate_roads`] seeds streamlines on a jittered
 //!    grid and traces them through a [`TensorField`] using RK2 integration,
 //!    snapping and splitting edges to form a planar [`RoadGraph`].
-//! 2. **Block extraction** — [`extract_blocks`] walks the planar graph with a
+//! 2. **Graph rationalization** — [`rationalize_graph`] rewrites the raw tracer
+//!    output into clean geometry: RDP decimation removes unnecessary points,
+//!    quadratic Bézier fillets smooth sharp bends, and elevation profiles are
+//!    box-blurred and grade-clamped. Arteries are traced through intersections
+//!    for global straightening; severed side-streets are reconnected.
+//! 3. **Block extraction** — [`extract_blocks`] walks the planar graph with a
 //!    minimum-angle (left-most turn) algorithm, producing closed [`CityBlock`]
 //!    polygons for every bounded interior face.
-//! 3. **Lot subdivision** — [`extract_lots`] recursively splits each block
+//! 4. **Lot subdivision** — [`extract_lots`] recursively splits each block
 //!    perpendicular to its longest edge (through the centroid) until pieces
 //!    are below a configurable area threshold, then computes a street-aligned
 //!    [`BuildingLot`] rectangle with front/side/rear setbacks.
-//! 4. **Terrain carving** — [`carve_roads`] and [`carve_lots`] flatten the
+//! 5. **Terrain carving** — [`carve_roads`] and [`carve_lots`] flatten the
 //!    heightmap under roads and building foundations with smooth embankment
 //!    blending at the edges. Both accept a configurable `blend_radius` that
 //!    controls how far the embankment zone extends — larger values produce
 //!    wider, gentler slopes on steep terrain. `carve_roads` returns a boolean
 //!    road-surface mask so that `carve_lots` can avoid overwriting
-//!    already-flattened pavement.
-//! 5. **Road pruning** — [`prune_unused_roads`] optionally removes roads that
+//!    already-flattened pavement. Road elevations use the rationalized
+//!    (smoothed) node heights.
+//! 6. **Road pruning** — [`prune_unused_roads`] optionally removes roads that
 //!    do not serve any building lot, keeping only the minimal connected
 //!    sub-network via Dijkstra-based Steiner tree construction.
-//! 6. **3D mesh generation** — [`generate_road_meshes`] produces engine-agnostic
+//! 7. **3D mesh generation** — [`generate_road_meshes`] produces engine-agnostic
 //!    [`ProceduralMesh`] vertex buffers for intersection hubs (flat N-gon
-//!    polygons) and street ribbons (Catmull-Rom-smoothed extruded strips).
+//!    polygons with embankment skirts) and street ribbons (extruded strips
+//!    with flanking skirt meshes).
 //!
 //! # Quick start
 //!
@@ -45,24 +52,28 @@
 //! // 1. Generate road network
 //! let mut graph = generate_roads(&heightmap, &config).expect("invalid config");
 //!
-//! // 2. Extract city blocks
+//! // 2. Rationalize: straighten, fillet, and smooth elevations
+//! rationalize_graph(&mut graph, &heightmap, &RationalizeConfig::default());
+//!
+//! // 3. Extract city blocks
 //! extract_blocks(&mut graph);
 //!
-//! // 3. Subdivide blocks into building lots
+//! // 4. Subdivide blocks into building lots
 //! let lots = extract_lots(&graph, &heightmap, config.water_level, &LotConfig::default());
 //!
-//! // 4. Carve roads and lots into terrain
+//! // 5. Carve roads and lots into terrain
 //! let mut hm = heightmap;
 //! let road_mask = carve_roads(&graph, &mut hm, 6.0, 4.0);
 //! carve_lots(&lots, &mut hm, 2.0, Some(&road_mask));
 //!
-//! // 5. (Optional) Prune roads that don't serve any lot
+//! // 6. (Optional) Prune roads that don't serve any lot
 //! prune_unused_roads(&mut graph, &lots);
 //!
-//! // 6. Generate 3D road meshes
+//! // 7. Generate 3D road meshes
 //! let meshes = generate_road_meshes(&graph, &hm, &RoadMeshConfig::default());
-//! // meshes.hubs — intersection polygons
+//! // meshes.hubs    — intersection polygons
 //! // meshes.ribbons — street ribbon strips
+//! // meshes.skirts  — embankment skirt meshes
 //! ```
 
 pub mod carve;
