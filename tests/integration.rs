@@ -1,6 +1,7 @@
 use symbios_ground::HeightMap;
 use symbios_tensor::{
-    LotConfig, RoadType, TensorConfig, carve_roads, extract_blocks, extract_lots, generate_roads,
+    LotConfig, RoadMeshConfig, RoadType, TensorConfig, carve_roads, extract_blocks, extract_lots,
+    generate_roads,
 };
 
 fn flat_heightmap() -> HeightMap {
@@ -114,7 +115,7 @@ fn carve_modifies_heightmap() {
     let graph = generate_roads(&hm, &config).expect("generate_roads");
 
     if graph.edges.iter().any(|e| e.active) {
-        let _ = carve_roads(&graph, &mut hm, 2.0, 1.0);
+        let _ = carve_roads(&graph, &mut hm, &RoadMeshConfig::default(), 1.0);
         let carved_sum: f32 = hm.data().iter().sum();
         assert!(
             (carved_sum - original_sum).abs() > 1e-3,

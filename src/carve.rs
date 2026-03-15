@@ -6,8 +6,9 @@
 
 use symbios_ground::HeightMap;
 
-use crate::graph::RoadGraph;
+use crate::graph::{RoadGraph, RoadType};
 use crate::lots::BuildingLot;
+use crate::roads_3d::RoadMeshConfig;
 
 /// Flattens the heightmap under each building lot with blended embankments.
 ///
@@ -132,26 +133,25 @@ pub fn carve_lots(
     }
 }
 
-/// Flattens the heightmap along road edges, creating smooth graded surfaces
-/// where roads are placed, with blended embankments at the edges.
+/// Flattens the heightmap along road edges and around intersection hubs,
+/// creating smooth graded surfaces with blended embankments at the edges.
 ///
-/// `road_width` is the total width of the flat road surface (cells within
-/// half this distance from the edge centerline are flattened).
-/// `blend_radius` controls how far the embankment zone extends beyond the
-/// road surface. Larger values produce wider, gentler slopes — useful on
-/// steep terrain where an abrupt one-cell transition would look unnatural.
+/// Uses `road_config` to determine per-type road widths (major vs minor) and
+/// hub radii (including `curb_radius`), so the carved terrain matches the 3D
+/// mesh exactly. `blend_radius` controls how far the embankment zone extends
+/// beyond the road/hub surface.
 ///
 /// Returns a boolean mask (`Vec<bool>`, one entry per heightmap cell) marking
 /// cells that are part of a road surface. Pass this to [`carve_lots`] to
 /// prevent building foundations from overwriting road pavement.
 ///
-/// Uses a two-pass approach: first all road surfaces are flattened, then
-/// embankments are blended. This prevents later embankments from overwriting
-/// previously flattened road pavement at intersections.
+/// Uses a multi-pass approach: hub circles are flattened first, then edge
+/// surfaces, then embankments are blended. This prevents later passes from
+/// overwriting previously flattened pavement at intersections.
 pub fn carve_roads(
     graph: &RoadGraph,
     heightmap: &mut HeightMap,
-    road_width: f32,
+    road_config: &RoadMeshConfig,
     blend_radius: f32,
 ) -> Vec<bool> {
     let scale = heightmap.scale();
@@ -160,8 +160,6 @@ pub fn carve_roads(
     if hw == 0 || hh == 0 {
         return Vec::new();
     }
-
-    let half_w = road_width * 0.5;
 
     // Use the sovereign node elevations (smoothed by rationalization) as the
     // reference heights for carving. This makes roads slice through hills
@@ -172,15 +170,97 @@ pub fn carve_roads(
         .map(|n| n.elevation)
         .collect();
 
+    // Compute active degree for each node to identify hubs.
+    let degrees = crate::topology::compute_active_degrees(graph);
+
     // Track cells that have been set to a road surface height so that
     // the embankment pass does not overwrite them.
     let mut is_road_surface = vec![false; hw * hh];
 
-    // Pass 1: flatten all road surfaces
+    // Pass 1a: flatten hub circles (nodes with degree != 2).
+    for (nid, &deg) in degrees.iter().enumerate() {
+        if deg == 0 || deg == 2 {
+            continue;
+        }
+        let node = &graph.nodes[nid];
+        let center = node.position;
+        let center_h = node.elevation;
+
+        // Hub radius: max half-width of connecting edges + curb radius
+        // (mirrors the logic in roads_3d::generate_hub).
+        let mut radius = road_config.minor_half_width;
+        for &eid in &node.edges {
+            let edge = &graph.edges[eid as usize];
+            if !edge.active {
+                continue;
+            }
+            let hw_edge = match edge.road_type {
+                RoadType::Major => road_config.major_half_width,
+                RoadType::Minor => road_config.minor_half_width,
+            };
+            if hw_edge > radius {
+                radius = hw_edge;
+            }
+        }
+        radius += road_config.curb_radius;
+
+        // Flatten a circle of `radius` around the hub center.
+        let expand = radius + scale;
+        let gx_start = ((center.x - expand).max(0.0) / scale).floor() as usize;
+        let gx_end = (((center.x + expand) / scale).ceil() as usize).min(hw - 1);
+        let gz_start = ((center.y - expand).max(0.0) / scale).floor() as usize;
+        let gz_end = (((center.y + expand) / scale).ceil() as usize).min(hh - 1);
+
+        for gz in gz_start..=gz_end {
+            for gx in gx_start..=gx_end {
+                let wx = gx as f32 * scale;
+                let wz = gz as f32 * scale;
+                let dist = ((wx - center.x).powi(2) + (wz - center.y).powi(2)).sqrt();
+                if dist <= radius {
+                    heightmap.set(gx, gz, center_h);
+                    is_road_surface[gz * hw + gx] = true;
+                }
+            }
+        }
+
+        // Hub embankment ring.
+        let outer = radius + blend_radius;
+        let gx_start_e = ((center.x - outer - scale).max(0.0) / scale).floor() as usize;
+        let gx_end_e = (((center.x + outer + scale) / scale).ceil() as usize).min(hw - 1);
+        let gz_start_e = ((center.y - outer - scale).max(0.0) / scale).floor() as usize;
+        let gz_end_e = (((center.y + outer + scale) / scale).ceil() as usize).min(hh - 1);
+
+        for gz in gz_start_e..=gz_end_e {
+            for gx in gx_start_e..=gx_end_e {
+                let idx = gz * hw + gx;
+                if is_road_surface[idx] {
+                    continue;
+                }
+                let wx = gx as f32 * scale;
+                let wz = gz as f32 * scale;
+                let dist = ((wx - center.x).powi(2) + (wz - center.y).powi(2)).sqrt();
+                if dist > radius && dist <= outer {
+                    let blend = (dist - radius) / blend_radius;
+                    let terrain_h = heightmap.get(gx, gz);
+                    let blended = center_h + blend * (terrain_h - center_h);
+                    heightmap.set(gx, gz, blended);
+                    // Mark so edge embankments don't overwrite.
+                    is_road_surface[idx] = true;
+                }
+            }
+        }
+    }
+
+    // Pass 1b: flatten all road edge surfaces (per-type half-width).
     for edge in &graph.edges {
         if !edge.active {
             continue;
         }
+        let half_w = match edge.road_type {
+            RoadType::Major => road_config.major_half_width,
+            RoadType::Minor => road_config.minor_half_width,
+        };
+
         let (start_pos, end_pos, start_h, end_h, _dir, _length) =
             match cached_edge_params(graph, edge, &node_heights) {
                 Some(v) => v,
@@ -193,25 +273,34 @@ pub fn carve_roads(
 
         for gz in gz_start..=gz_end {
             for gx in gx_start..=gx_end {
+                let idx = gz * hw + gx;
+                if is_road_surface[idx] {
+                    continue;
+                }
                 let (dist, road_h) = project_cell(gx, gz, scale, &ep);
                 if dist <= half_w {
                     heightmap.set(gx, gz, road_h);
-                    is_road_surface[gz * hw + gx] = true;
+                    is_road_surface[idx] = true;
                 }
             }
         }
     }
 
-    // Pass 2: embankments — for each cell, only the closest road's
+    // Pass 2: edge embankments — for each cell, only the closest road's
     // embankment applies, preventing overwrite artifacts at intersections.
-    // First, find the minimum distance and corresponding road height per cell.
-    let mut embankment_dist = vec![f32::MAX; hw * hh];
+    // Store the blend factor (0..1) directly so we don't need per-cell half-width.
+    let mut embankment_blend = vec![f32::MAX; hw * hh];
     let mut embankment_road_h = vec![0.0_f32; hw * hh];
 
     for edge in &graph.edges {
         if !edge.active {
             continue;
         }
+        let half_w = match edge.road_type {
+            RoadType::Major => road_config.major_half_width,
+            RoadType::Minor => road_config.minor_half_width,
+        };
+
         let (start_pos, end_pos, start_h, end_h, _dir, _length) =
             match cached_edge_params(graph, edge, &node_heights) {
                 Some(v) => v,
@@ -229,22 +318,25 @@ pub fn carve_roads(
                     continue;
                 }
                 let (dist, road_h) = project_cell(gx, gz, scale, &ep);
-                if dist > half_w && dist <= half_w + blend_radius && dist < embankment_dist[idx] {
-                    embankment_dist[idx] = dist;
-                    embankment_road_h[idx] = road_h;
+                if dist > half_w && dist <= half_w + blend_radius {
+                    let blend = (dist - half_w) / blend_radius;
+                    if blend < embankment_blend[idx] {
+                        embankment_blend[idx] = blend;
+                        embankment_road_h[idx] = road_h;
+                    }
                 }
             }
         }
     }
 
-    // Now apply the winning embankment blend for each cell.
+    // Apply the winning embankment blend for each cell.
     for gz in 0..hh {
         for gx in 0..hw {
             let idx = gz * hw + gx;
-            if embankment_dist[idx] < f32::MAX {
-                let blend = (embankment_dist[idx] - half_w) / blend_radius;
+            if embankment_blend[idx] < f32::MAX {
                 let current_h = heightmap.get(gx, gz);
-                let blended = embankment_road_h[idx] + blend * (current_h - embankment_road_h[idx]);
+                let blended = embankment_road_h[idx]
+                    + embankment_blend[idx] * (current_h - embankment_road_h[idx]);
                 heightmap.set(gx, gz, blended);
             }
         }

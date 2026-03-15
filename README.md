@@ -82,7 +82,7 @@ let lots = extract_lots(&graph, &heightmap, config.water_level, &LotConfig::defa
 
 // 5. Carve roads and lots into terrain
 let mut hm = heightmap;
-let road_mask = carve_roads(&graph, &mut hm, 6.0, 4.0);
+let road_mask = carve_roads(&graph, &mut hm, &RoadMeshConfig::default(), 4.0);
 carve_lots(&lots, &mut hm, 2.0, Some(&road_mask));
 
 // 6. (Optional) Prune roads that don't serve any lot

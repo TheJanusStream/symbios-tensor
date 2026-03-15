@@ -8,7 +8,7 @@
 //! chains of degree-2 nodes, smoothed with Centripetal Catmull-Rom splines
 //! and truncated at hub boundaries.
 
-use glam::Vec2;
+use glam::{Vec2, Vec3};
 use symbios_ground::HeightMap;
 
 use crate::graph::{NodeId, RoadGraph, RoadType};
@@ -262,14 +262,14 @@ fn generate_hub(
         let i1 = next * 2;    // inner next
         let o1 = next * 2 + 1; // outer next
 
-        // Two triangles per quad, winding outward.
+        // Two triangles per quad, CCW winding so normals face outward.
         skirt.indices.push(i0);
-        skirt.indices.push(o0);
         skirt.indices.push(i1);
+        skirt.indices.push(o0);
 
         skirt.indices.push(o0);
-        skirt.indices.push(o1);
         skirt.indices.push(i1);
+        skirt.indices.push(o1);
     }
 
     (mesh, skirt)
@@ -385,8 +385,18 @@ fn truncate_polyline_with_elevations(
     }
     let total = *arc_lengths.last().unwrap();
 
-    let t_start = start_trim;
-    let t_end = total - end_trim;
+    // Clamp combined trim so it never exceeds 98% of the segment length.
+    // This prevents ribbons from vanishing when two hubs are very close.
+    let max_trim = total * 0.98;
+    let (adj_start, adj_end) = if start_trim + end_trim > max_trim {
+        let scale = max_trim / (start_trim + end_trim);
+        (start_trim * scale, end_trim * scale)
+    } else {
+        (start_trim, end_trim)
+    };
+
+    let t_start = adj_start;
+    let t_end = total - adj_end;
     if t_start >= t_end {
         return (Vec::new(), Vec::new());
     }
@@ -499,11 +509,26 @@ fn extrude_ribbon(
         // Centerline height — sovereign elevation from rationalized graph.
         let center_y = elevations[i] + config.depth_bias;
 
+        // Compute slope-aware normal via cross product of 3D forward and right.
+        let elev_delta = if i == 0 {
+            elevations[1] - elevations[0]
+        } else if i == n - 1 {
+            elevations[n - 1] - elevations[n - 2]
+        } else {
+            elevations[i + 1] - elevations[i - 1]
+        };
+        let forward_3d = Vec3::new(tangent.x, elev_delta, tangent.y).normalize_or_zero();
+        let right_3d = Vec3::new(right.x, 0.0, right.y);
+        let normal = right_3d.cross(forward_3d).normalize_or_zero();
+        // Ensure normal points upward; flip if necessary.
+        let normal = if normal.y < 0.0 { -normal } else { normal };
+        let norm_arr = [normal.x, normal.y, normal.z];
+
         // Asphalt vertices: right (idx 2i), left (idx 2i+1).
         asphalt.vertices.push([right_pt.x, center_y, right_pt.y]);
         asphalt.vertices.push([left_pt.x, center_y, left_pt.y]);
-        asphalt.normals.push([0.0, 1.0, 0.0]);
-        asphalt.normals.push([0.0, 1.0, 0.0]);
+        asphalt.normals.push(norm_arr);
+        asphalt.normals.push(norm_arr);
 
         if i > 0 {
             accum_dist += (points[i] - points[i - 1]).length();
