@@ -99,6 +99,111 @@ pub fn extract_chains(graph: &RoadGraph, degrees: &[u32]) -> Vec<Chain> {
     chains
 }
 
+/// Extracts all maximal chains of degree-2 nodes, **ignoring road type**.
+///
+/// Unlike [`extract_chains`], this walks through degree-2 nodes regardless of
+/// whether adjacent edges differ in [`RoadType`]. Each returned chain contains
+/// the edges as they appear in the graph — the caller can inspect or overwrite
+/// their types. Used by the road-type unification pass.
+pub fn extract_chains_any_type(graph: &RoadGraph, degrees: &[u32]) -> Vec<Chain> {
+    let mut visited_edges = vec![false; graph.edges.len()];
+    let mut chains = Vec::new();
+
+    for (eid, edge) in graph.edges.iter().enumerate() {
+        if !edge.active || visited_edges[eid] {
+            continue;
+        }
+
+        visited_edges[eid] = true;
+
+        let mut chain_nodes = Vec::new();
+        let mut chain_edges = Vec::new();
+
+        // Walk backwards from edge.start (type-agnostic).
+        let (head_nodes, head_edges) = walk_chain_any_type(
+            graph, degrees, edge.start, eid as u32, &mut visited_edges,
+        );
+        head_nodes.into_iter().rev().for_each(|n| chain_nodes.push(n));
+        head_edges.into_iter().rev().for_each(|e| chain_edges.push(e));
+
+        // Seed edge endpoints.
+        chain_nodes.push(edge.start);
+        chain_edges.push(eid as EdgeId);
+        chain_nodes.push(edge.end);
+
+        // Walk forward from edge.end.
+        let (tail_nodes, tail_edges) = walk_chain_any_type(
+            graph, degrees, edge.end, eid as u32, &mut visited_edges,
+        );
+        chain_nodes.extend(tail_nodes);
+        chain_edges.extend(tail_edges);
+
+        chain_nodes.dedup();
+
+        if chain_nodes.len() >= 2 {
+            // Use the first edge's road type as the nominal type; the caller
+            // will overwrite it after majority-vote anyway.
+            chains.push(Chain {
+                nodes: chain_nodes,
+                road_type: edge.road_type,
+                edges: chain_edges,
+            });
+        }
+    }
+
+    chains
+}
+
+/// Walks from `start_node` through degree-2 nodes regardless of road type.
+fn walk_chain_any_type(
+    graph: &RoadGraph,
+    degrees: &[u32],
+    start_node: NodeId,
+    from_edge: u32,
+    visited_edges: &mut [bool],
+) -> (Vec<NodeId>, Vec<EdgeId>) {
+    let mut nodes = Vec::new();
+    let mut edges = Vec::new();
+    let mut current = start_node;
+    let mut prev_edge = from_edge;
+
+    if degrees[current as usize] != 2 {
+        return (nodes, edges);
+    }
+
+    loop {
+        let node = &graph.nodes[current as usize];
+        let mut next_edge = None;
+        for &eid in &node.edges {
+            if eid == prev_edge {
+                continue;
+            }
+            let e = &graph.edges[eid as usize];
+            if !e.active || visited_edges[eid as usize] {
+                continue;
+            }
+            // No road_type check — walk through any type.
+            next_edge = Some(eid);
+            break;
+        }
+
+        let Some(ne) = next_edge else { break };
+        visited_edges[ne as usize] = true;
+        edges.push(ne);
+
+        let next_node = graph.opposite(ne, current);
+        nodes.push(next_node);
+
+        if degrees[next_node as usize] != 2 {
+            break;
+        }
+        prev_edge = ne;
+        current = next_node;
+    }
+
+    (nodes, edges)
+}
+
 /// Walks from `start_node` through degree-2 nodes of matching road type.
 /// Returns `(nodes_visited, edges_traversed)` — `start_node` is NOT included.
 fn walk_chain(

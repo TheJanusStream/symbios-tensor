@@ -17,7 +17,7 @@ use symbios_ground::HeightMap;
 
 use crate::geometry::closest_point_on_segment;
 use crate::graph::{EdgeId, NodeId, RoadGraph, RoadType};
-use crate::topology::{compute_active_degrees, extract_arteries, extract_chains};
+use crate::topology::{compute_active_degrees, extract_arteries, extract_chains, extract_chains_any_type};
 
 /// Configuration for the graph rationalization pass.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -58,7 +58,51 @@ impl Default for RationalizeConfig {
 // Public API
 // ---------------------------------------------------------------------------
 
+/// Unifies road types along topological chains (degree-2 paths between
+/// intersections) so that each chain has a single, consistent [`RoadType`].
+///
+/// When major and minor traces collide at T-junctions, the resulting path
+/// can alternate between types. This shatters arteries during smoothing
+/// because `extract_arteries` only follows same-type edges. By overwriting
+/// every edge in a chain to the majority type, we guarantee that each
+/// inter-intersection stretch is a single unbroken type.
+fn unify_road_types(graph: &mut RoadGraph) {
+    let degrees = compute_active_degrees(graph);
+    let chains = extract_chains_any_type(graph, &degrees);
+
+    for chain in &chains {
+        // Tally total length by road type.
+        let mut major_len: f32 = 0.0;
+        let mut minor_len: f32 = 0.0;
+
+        for &eid in &chain.edges {
+            let edge = &graph.edges[eid as usize];
+            let a = graph.node_pos(edge.start);
+            let b = graph.node_pos(edge.end);
+            let seg_len = (b - a).length();
+            match edge.road_type {
+                RoadType::Major => major_len += seg_len,
+                RoadType::Minor => minor_len += seg_len,
+            }
+        }
+
+        let winner = if major_len >= minor_len {
+            RoadType::Major
+        } else {
+            RoadType::Minor
+        };
+
+        // Overwrite all edges in this chain to the majority type.
+        for &eid in &chain.edges {
+            graph.edges[eid as usize].road_type = winner;
+        }
+    }
+}
+
 /// Rationalizes the road graph in-place.
+///
+/// **Phase 0 — Type unification:** Ensures each degree-2 chain between
+/// intersections has a single, consistent road type (majority-vote).
 ///
 /// **Phase 1 — Arteries:** Traces continuous paths of same-type edges
 /// *through* intersections (by forward-vector alignment), then applies
@@ -68,6 +112,9 @@ impl Default for RationalizeConfig {
 /// **Phase 2 — Residual chains:** Any edges not consumed by an artery are
 /// processed with the original chain-based RDP + fillet pass.
 pub fn rationalize_graph(graph: &mut RoadGraph, hm: &HeightMap, config: &RationalizeConfig) {
+    // --- Phase 0: Unify road types along degree-2 chains ---
+    unify_road_types(graph);
+
     // --- Phase 1: Artery rationalization ---
     // Process Major arteries first (avenues get priority), then Minor.
     // Only arteries with 3+ nodes (2+ edges) benefit from global
