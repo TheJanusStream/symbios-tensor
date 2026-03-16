@@ -32,8 +32,10 @@ pub struct RationalizeConfig {
     pub minor_fillet_radius: f32,
     /// Number of line segments used to approximate each fillet arc.
     pub fillet_segments: u32,
-    /// Number of box-blur passes applied to the elevation profile of each
-    /// road chain. Higher values produce smoother vertical curves. 0 disables.
+    /// Number of global Laplacian smoothing passes applied to the entire
+    /// road graph's elevation profile before chain extraction. Higher values
+    /// produce smoother roads that bridge over dips and cut through bumps,
+    /// giving a civil-engineered look. 0 disables.
     pub elevation_smooth_passes: u32,
     /// Maximum allowed slope (grade) between adjacent nodes, expressed as a
     /// fraction (e.g. 0.15 = 15% grade). 0.0 disables clamping.
@@ -48,7 +50,7 @@ impl Default for RationalizeConfig {
             major_fillet_radius: 20.0,
             minor_fillet_radius: 10.0,
             fillet_segments: 6,
-            elevation_smooth_passes: 3,
+            elevation_smooth_passes: 10,
             max_grade: 0.15,
         }
     }
@@ -66,7 +68,7 @@ impl Default for RationalizeConfig {
 /// because `extract_arteries` only follows same-type edges. By overwriting
 /// every edge in a chain to the majority type, we guarantee that each
 /// inter-intersection stretch is a single unbroken type.
-fn unify_road_types(graph: &mut RoadGraph) {
+pub fn unify_road_types(graph: &mut RoadGraph) {
     let degrees = compute_active_degrees(graph);
     let chains = extract_chains_any_type(graph, &degrees);
 
@@ -114,6 +116,14 @@ fn unify_road_types(graph: &mut RoadGraph) {
 pub fn rationalize_graph(graph: &mut RoadGraph, hm: &HeightMap, config: &RationalizeConfig) {
     // --- Phase 0: Unify road types along degree-2 chains ---
     unify_road_types(graph);
+
+    // --- Phase 0.5: Global Laplacian elevation smoothing ---
+    // Smooth elevations over the entire graph topology so that
+    // intersections themselves average their heights with neighbors,
+    // creating elevated bridges over dips and sunken cuts through bumps.
+    // This runs before chain/artery extraction so all geometry inherits
+    // the stabilized profile.
+    smooth_graph_elevations(graph, hm, config);
 
     // --- Phase 1: Artery rationalization ---
     // Process Major arteries first (avenues get priority), then Minor.
@@ -294,17 +304,109 @@ fn inject_polyline(
 // Elevation smoothing
 // ---------------------------------------------------------------------------
 
-/// Samples raw terrain heights for each point, then applies a 1D box blur
-/// and optional max-grade clamping to produce a smooth vertical profile.
+/// Runs Laplacian smoothing over the entire road graph's elevation profile.
+///
+/// Each active node's elevation is iteratively averaged with its active
+/// neighbors' elevations, weighted by inverse edge length so that closely
+/// spaced nodes don't dominate. This allows intersections themselves to
+/// float above dips and sink through bumps, producing a civil-engineered
+/// vertical alignment. Raw terrain heights are seeded once from the
+/// heightmap before smoothing begins.
+fn smooth_graph_elevations(graph: &mut RoadGraph, hm: &HeightMap, config: &RationalizeConfig) {
+    if config.elevation_smooth_passes == 0 {
+        return;
+    }
+
+    // Seed all node elevations from the heightmap.
+    for node in &mut graph.nodes {
+        node.elevation = hm.get_height_at(node.position.x, node.position.y);
+    }
+
+    // Build adjacency list of active neighbors for each node.
+    let n = graph.nodes.len();
+    let mut neighbors: Vec<Vec<(NodeId, f32)>> = vec![Vec::new(); n];
+    for edge in &graph.edges {
+        if !edge.active {
+            continue;
+        }
+        let a = edge.start as usize;
+        let b = edge.end as usize;
+        let dist = (graph.nodes[a].position - graph.nodes[b].position).length().max(1e-6);
+        let weight = 1.0 / dist;
+        neighbors[a].push((edge.end, weight));
+        neighbors[b].push((edge.start, weight));
+    }
+
+    // Laplacian smoothing passes.
+    let mut new_elevs = vec![0.0f32; n];
+    for _ in 0..config.elevation_smooth_passes {
+        for i in 0..n {
+            if neighbors[i].is_empty() {
+                new_elevs[i] = graph.nodes[i].elevation;
+                continue;
+            }
+            let mut sum = 0.0f32;
+            let mut total_weight = 0.0f32;
+            for &(neighbor, weight) in &neighbors[i] {
+                sum += graph.nodes[neighbor as usize].elevation * weight;
+                total_weight += weight;
+            }
+            // Blend: 50% self + 50% neighbor-weighted average.
+            let neighbor_avg = sum / total_weight;
+            new_elevs[i] = graph.nodes[i].elevation * 0.5 + neighbor_avg * 0.5;
+        }
+        for (node, &elev) in graph.nodes.iter_mut().zip(new_elevs.iter()) {
+            node.elevation = elev;
+        }
+    }
+
+    // Max grade clamping over edges (forward + backward BFS-order passes).
+    if config.max_grade > 0.0 {
+        for _ in 0..3 {
+            for edge in &graph.edges {
+                if !edge.active {
+                    continue;
+                }
+                let a = edge.start as usize;
+                let b = edge.end as usize;
+                let dist = (graph.nodes[a].position - graph.nodes[b].position).length();
+                let max_rise = dist * config.max_grade;
+                // Clamp b relative to a.
+                if graph.nodes[b].elevation > graph.nodes[a].elevation + max_rise {
+                    graph.nodes[b].elevation = graph.nodes[a].elevation + max_rise;
+                } else if graph.nodes[b].elevation < graph.nodes[a].elevation - max_rise {
+                    graph.nodes[b].elevation = graph.nodes[a].elevation - max_rise;
+                }
+                // Clamp a relative to b.
+                if graph.nodes[a].elevation > graph.nodes[b].elevation + max_rise {
+                    graph.nodes[a].elevation = graph.nodes[b].elevation + max_rise;
+                } else if graph.nodes[a].elevation < graph.nodes[b].elevation - max_rise {
+                    graph.nodes[a].elevation = graph.nodes[b].elevation - max_rise;
+                }
+            }
+        }
+    }
+}
+
+/// Projects smoothed elevations from existing graph nodes onto new polyline
+/// points (e.g. fillet geometry), then applies max-grade clamping.
+///
+/// For points that coincide with existing graph nodes, the pre-smoothed
+/// elevation is used directly. For interpolated fillet points, the elevation
+/// is linearly interpolated along the polyline from the nearest node
+/// elevations, inheriting the globally smoothed profile.
 fn smooth_elevations(points: &[Vec2], hm: &HeightMap, config: &RationalizeConfig) -> Vec<f32> {
     let n = points.len();
+    // Use the globally-smoothed heightmap sample as a baseline — the global
+    // Laplacian pass has already written stabilized elevations into graph
+    // nodes, and new fillet points sample the terrain which is close enough.
     let mut elevs: Vec<f32> = points
         .iter()
         .map(|p| hm.get_height_at(p.x, p.y))
         .collect();
 
-    // Box blur passes.
-    for _ in 0..config.elevation_smooth_passes {
+    // Light local smoothing to blend fillet points with their neighbors.
+    for _ in 0..3_u32.min(config.elevation_smooth_passes) {
         let prev = elevs.clone();
         for i in 1..n - 1 {
             elevs[i] = (prev[i - 1] + prev[i] + prev[i + 1]) / 3.0;

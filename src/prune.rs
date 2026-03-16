@@ -10,6 +10,7 @@
 use crate::geometry::closest_point_on_segment;
 use crate::graph::{EdgeId, NodeId, RoadGraph, RoadType};
 use crate::lots::BuildingLot;
+use crate::rationalize::unify_road_types;
 use std::cmp::Ordering;
 use std::collections::{BTreeSet, BinaryHeap, HashMap, HashSet};
 
@@ -324,4 +325,11 @@ pub fn prune_unused_roads(graph: &mut RoadGraph, lots: &[BuildingLot]) {
             edge.active = false;
         }
     }
+
+    // --- PHASE 5: Re-unify road types ---
+    // Pruning can turn 3-way intersections into 2-way corners where a
+    // Major meets a Minor. The mesher sees the type change, breaks the
+    // chain, and refuses to generate a hub (degree-2 node), leaving a
+    // gap. Re-unifying merges such corners into a single chain.
+    unify_road_types(graph);
 }

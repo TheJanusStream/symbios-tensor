@@ -231,8 +231,8 @@ fn compute_truncations(
 
         // Intersection (degree 3+): sort arms by angle.
         arms.sort_by(|a, b| {
-            let angle_a = a.1.y.atan2(a.1.x);
-            let angle_b = b.1.y.atan2(b.1.x);
+            let angle_a = (-a.1.y).atan2(a.1.x);
+            let angle_b = (-b.1.y).atan2(b.1.x);
             angle_a.partial_cmp(&angle_b).unwrap()
         });
 
@@ -463,7 +463,7 @@ fn generate_hub_procedural(
             right,
             half_width: hw,
             truncation: trunc,
-            angle: dir.y.atan2(dir.x),
+            angle: (-dir.y).atan2(dir.x),
         });
     }
 
@@ -504,14 +504,14 @@ fn generate_hub_procedural(
             .push([pt.x * config.texture_scale, pt.y * config.texture_scale]);
     }
 
-    // Fan triangles around perimeter.
+    // Fan triangles around perimeter (CCW winding for upward-facing +Y normal).
     let peri_count = perimeter.len() as u32;
     for i in 0..peri_count {
         let a = 1 + i;
         let b = 1 + (i + 1) % peri_count;
         mesh.indices.push(0);
-        mesh.indices.push(b);
         mesh.indices.push(a);
+        mesh.indices.push(b);
     }
 
     // --- Skirt mesh: quads only in angular gaps between adjacent roads ---
