@@ -111,7 +111,10 @@ pub fn carve_lots(
 
                 let dist_to_edge = lot_cell_distance(gx, gz, scale, &lp);
 
-                if dist_to_edge > 0.0 && dist_to_edge < blend_radius && dist_to_edge < embankment_dist[idx] {
+                if dist_to_edge > 0.0
+                    && dist_to_edge < blend_radius
+                    && dist_to_edge < embankment_dist[idx]
+                {
                     embankment_dist[idx] = dist_to_edge;
                     embankment_lot_h[idx] = target_h;
                 }
@@ -164,11 +167,7 @@ pub fn carve_roads(
     // Use the sovereign node elevations (smoothed by rationalization) as the
     // reference heights for carving. This makes roads slice through hills
     // and bridge dips rather than hugging every terrain bump.
-    let node_heights: Vec<f32> = graph
-        .nodes
-        .iter()
-        .map(|n| n.elevation)
-        .collect();
+    let node_heights: Vec<f32> = graph.nodes.iter().map(|n| n.elevation).collect();
 
     // Compute active degree for each node to identify hubs.
     let degrees = crate::topology::compute_active_degrees(graph);

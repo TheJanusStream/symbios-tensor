@@ -229,7 +229,9 @@ fn trace_streamline(
     let start_node = match seed.existing_node {
         Some(id) => id,
         None => {
-            let elev = field.heightmap.get_height_at(seed.position.x, seed.position.y);
+            let elev = field
+                .heightmap
+                .get_height_at(seed.position.x, seed.position.y);
             let id = graph.add_node_with_elevation(seed.position, elev);
             spatial.insert_node(id, seed.position);
             id
@@ -320,17 +322,13 @@ fn trace_streamline(
                         let mid_node = split_or_snap_edge(graph, spatial, cross_eid, cross_pt);
                         // split_or_snap_edge may return an existing endpoint;
                         // guard against creating a duplicate edge.
-                        let already = graph.nodes[current_node as usize]
-                            .edges
-                            .iter()
-                            .any(|&eid| {
-                                let e = &graph.edges[eid as usize];
-                                e.active && (e.start == mid_node || e.end == mid_node)
-                            });
+                        let already = graph.nodes[current_node as usize].edges.iter().any(|&eid| {
+                            let e = &graph.edges[eid as usize];
+                            e.active && (e.start == mid_node || e.end == mid_node)
+                        });
                         if !already {
                             let mid_pos = graph.node_pos(mid_node);
-                            let connecting =
-                                graph.add_edge(current_node, mid_node, seed.road_type);
+                            let connecting = graph.add_edge(current_node, mid_node, seed.road_type);
                             spatial.insert_edge(connecting, current_pos, mid_pos);
                         }
                     } else {
@@ -362,13 +360,10 @@ fn trace_streamline(
                     let cross_mid = split_or_snap_edge(graph, spatial, cross_eid, cross_pt);
                     // split_or_snap_edge may return an existing endpoint;
                     // guard against creating a duplicate edge.
-                    let already = graph.nodes[current_node as usize]
-                        .edges
-                        .iter()
-                        .any(|&eid| {
-                            let e = &graph.edges[eid as usize];
-                            e.active && (e.start == cross_mid || e.end == cross_mid)
-                        });
+                    let already = graph.nodes[current_node as usize].edges.iter().any(|&eid| {
+                        let e = &graph.edges[eid as usize];
+                        e.active && (e.start == cross_mid || e.end == cross_mid)
+                    });
                     if !already {
                         let cross_pos = graph.node_pos(cross_mid);
                         let connecting_edge =

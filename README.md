@@ -21,8 +21,8 @@ field falls back to an axis-aligned Manhattan grid.
    *through* intersections (by forward-vector alignment), applies
    Ramer-Douglas-Peucker decimation to remove unnecessary intermediate
    points, and replaces sharp bends with smooth quadratic Bézier fillet arcs.
-   Elevation profiles are smoothed with a box blur and clamped to a maximum
-   grade. Side-streets severed by moved intersection nodes are automatically
+   Elevation profiles are smoothed with global Laplacian passes and clamped
+   to a maximum grade. Side-streets severed by moved intersection nodes are automatically
    reconnected.
 
 3. **Block extraction** (`extract_blocks`) — Walks the planar road graph with
@@ -131,7 +131,7 @@ let meshes = generate_road_meshes(&graph, &hm, &RoadMeshConfig::default());
 | `major_fillet_radius` | `20.0` | Fillet radius for major (contour-following) roads |
 | `minor_fillet_radius` | `10.0` | Fillet radius for minor (gradient-following) roads |
 | `fillet_segments` | `6` | Number of line segments used to approximate each fillet arc |
-| `elevation_smooth_passes` | `3` | Box-blur passes for the elevation profile of each road chain; 0 disables |
+| `elevation_smooth_passes` | `10` | Global Laplacian smoothing passes applied to the road graph's elevation profile before chain extraction; 0 disables |
 | `max_grade` | `0.15` | Maximum allowed slope between adjacent nodes (e.g. 0.15 = 15% grade); 0.0 disables |
 
 ### `RoadMeshConfig`
@@ -140,11 +140,11 @@ let meshes = generate_road_meshes(&graph, &hm, &RoadMeshConfig::default());
 |---|---|---|
 | `major_half_width` | `3.0` | Half-width of major roads (world units) |
 | `minor_half_width` | `2.0` | Half-width of minor roads (world units) |
-| `hub_sides` | `8` | Number of sides for hub polygons (e.g. 8 = octagon) |
+| `hub_sides` | `8` | Number of sides for dead-end cap polygons (e.g. 8 = octagon); degree-3+ intersections use procedural boundary polygons |
 | `depth_bias` | `0.05` | Vertices are raised above terrain by this amount to prevent z-fighting |
 | `texture_scale` | `0.1` | UV texture scale: world units per texture repeat |
 | `spline_subdivisions` | `8` | Legacy: Catmull-Rom subdivisions per graph edge; ignored when the graph has been rationalized |
-| `curb_radius` | `2.0` | Extra radius added to intersection hubs beyond the road half-width, creating a wider turning zone |
+| `curb_radius` | `2.0` | Extra radius added to dead-end caps beyond the road half-width, creating a wider turning zone |
 | `skirt` | `SkirtConfig::default()` | Embankment skirt configuration (see below) |
 
 ### `SkirtConfig`
@@ -163,7 +163,7 @@ let meshes = generate_road_meshes(&graph, &hm, &RoadMeshConfig::default());
 | `graph` | Arena-based road graph (`RoadNode`, `RoadEdge`, `CityBlock`) |
 | `spatial` | Spatial hash grid for O(1) proximity and intersection queries |
 | `geometry` | Segment intersection and closest-point primitives |
-| `rationalize` | RDP decimation, Bézier fillet smoothing, elevation smoothing, and artery-through-intersection straightening |
+| `rationalize` | RDP decimation, Bézier fillet smoothing, Laplacian elevation smoothing, grade clamping, and artery-through-intersection straightening |
 | `topology` | Shared topology helpers: chain extraction, artery extraction, active degree computation |
 | `polygons` | Minimum-cycle-basis block extraction and centroid computation |
 | `lots` | Recursive subdivision, frontage detection, inscribed box, setbacks |

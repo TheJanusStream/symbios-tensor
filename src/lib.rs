@@ -15,8 +15,9 @@
 //! 2. **Graph rationalization** — [`rationalize_graph`] rewrites the raw tracer
 //!    output into clean geometry: RDP decimation removes unnecessary points,
 //!    quadratic Bézier fillets smooth sharp bends, and elevation profiles are
-//!    box-blurred and grade-clamped. Arteries are traced through intersections
-//!    for global straightening; severed side-streets are reconnected.
+//!    Laplacian-smoothed and grade-clamped. Arteries are traced through
+//!    intersections for global straightening; severed side-streets are
+//!    reconnected.
 //! 3. **Block extraction** — [`extract_blocks`] walks the planar graph with a
 //!    minimum-angle (left-most turn) algorithm, producing closed [`CityBlock`]
 //!    polygons for every bounded interior face.

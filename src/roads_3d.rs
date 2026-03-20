@@ -522,7 +522,8 @@ fn generate_hub_procedural(
         let j = (i + 1) % n_arms;
 
         // Gap runs from arm[i]'s left corner to arm[j]'s right corner.
-        let left_corner = center + arms[i].dir * arms[i].truncation - arms[i].right * arms[i].half_width;
+        let left_corner =
+            center + arms[i].dir * arms[i].truncation - arms[i].right * arms[i].half_width;
         let right_corner =
             center + arms[j].dir * arms[j].truncation + arms[j].right * arms[j].half_width;
 
@@ -558,20 +559,22 @@ fn generate_hub_procedural(
 
             skirt.vertices.push([inner.x, center_y, inner.y]);
             skirt.normals.push([0.0, 1.0, 0.0]);
-            skirt
-                .uvs
-                .push([inner.x * config.texture_scale, inner.y * config.texture_scale]);
+            skirt.uvs.push([
+                inner.x * config.texture_scale,
+                inner.y * config.texture_scale,
+            ]);
 
             skirt.vertices.push([outer.x, outer_y, outer.y]);
             skirt.normals.push([0.0, 1.0, 0.0]);
-            skirt
-                .uvs
-                .push([outer.x * config.texture_scale, outer.y * config.texture_scale]);
+            skirt.uvs.push([
+                outer.x * config.texture_scale,
+                outer.y * config.texture_scale,
+            ]);
         }
 
         // Quad strip: connect adjacent cross-sections.
         for s in 0..subdivs {
-            let i0 = base_vert + s * 2;     // inner current
+            let i0 = base_vert + s * 2; // inner current
             let o0 = base_vert + s * 2 + 1; // outer current
             let i1 = base_vert + (s + 1) * 2;
             let o1 = base_vert + (s + 1) * 2 + 1;
@@ -643,8 +646,14 @@ fn generate_ribbon(
     let first_edge = chain.edges[0];
     let last_edge = *chain.edges.last().unwrap();
 
-    let start_trim = truncations.get(&(first_node, first_edge)).copied().unwrap_or(0.0);
-    let end_trim = truncations.get(&(last_node, last_edge)).copied().unwrap_or(0.0);
+    let start_trim = truncations
+        .get(&(first_node, first_edge))
+        .copied()
+        .unwrap_or(0.0);
+    let end_trim = truncations
+        .get(&(last_node, last_edge))
+        .copied()
+        .unwrap_or(0.0);
 
     let (truncated, truncated_elevs) =
         truncate_polyline_with_elevations(&smooth_pts, &node_elevs, start_trim, end_trim);
@@ -812,10 +821,8 @@ fn extrude_ribbon(
         let right_outer_pt = points[i] + right * (half_width + skirt_w);
         let left_outer_pt = points[i] - right * (half_width + skirt_w);
 
-        let right_outer_y =
-            heightmap.get_height_at(right_outer_pt.x, right_outer_pt.y) - bury;
-        let left_outer_y =
-            heightmap.get_height_at(left_outer_pt.x, left_outer_pt.y) - bury;
+        let right_outer_y = heightmap.get_height_at(right_outer_pt.x, right_outer_pt.y) - bury;
+        let left_outer_y = heightmap.get_height_at(left_outer_pt.x, left_outer_pt.y) - bury;
 
         skirts.vertices.push([right_pt.x, center_y, right_pt.y]);
         skirts

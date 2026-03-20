@@ -64,8 +64,14 @@ pub fn extract_chains(graph: &RoadGraph, degrees: &[u32]) -> Vec<Chain> {
             &mut visited_edges,
             road_type,
         );
-        head_nodes.into_iter().rev().for_each(|n| chain_nodes.push(n));
-        head_edges.into_iter().rev().for_each(|e| chain_edges.push(e));
+        head_nodes
+            .into_iter()
+            .rev()
+            .for_each(|n| chain_nodes.push(n));
+        head_edges
+            .into_iter()
+            .rev()
+            .for_each(|e| chain_edges.push(e));
 
         // Seed edge endpoints.
         chain_nodes.push(edge.start);
@@ -120,11 +126,16 @@ pub fn extract_chains_any_type(graph: &RoadGraph, degrees: &[u32]) -> Vec<Chain>
         let mut chain_edges = Vec::new();
 
         // Walk backwards from edge.start (type-agnostic).
-        let (head_nodes, head_edges) = walk_chain_any_type(
-            graph, degrees, edge.start, eid as u32, &mut visited_edges,
-        );
-        head_nodes.into_iter().rev().for_each(|n| chain_nodes.push(n));
-        head_edges.into_iter().rev().for_each(|e| chain_edges.push(e));
+        let (head_nodes, head_edges) =
+            walk_chain_any_type(graph, degrees, edge.start, eid as u32, &mut visited_edges);
+        head_nodes
+            .into_iter()
+            .rev()
+            .for_each(|n| chain_nodes.push(n));
+        head_edges
+            .into_iter()
+            .rev()
+            .for_each(|e| chain_edges.push(e));
 
         // Seed edge endpoints.
         chain_nodes.push(edge.start);
@@ -132,9 +143,8 @@ pub fn extract_chains_any_type(graph: &RoadGraph, degrees: &[u32]) -> Vec<Chain>
         chain_nodes.push(edge.end);
 
         // Walk forward from edge.end.
-        let (tail_nodes, tail_edges) = walk_chain_any_type(
-            graph, degrees, edge.end, eid as u32, &mut visited_edges,
-        );
+        let (tail_nodes, tail_edges) =
+            walk_chain_any_type(graph, degrees, edge.end, eid as u32, &mut visited_edges);
         chain_nodes.extend(tail_nodes);
         chain_edges.extend(tail_edges);
 

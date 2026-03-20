@@ -1,11 +1,16 @@
 //! Graph rationalization: straighten and smooth the road network.
 //!
 //! After the tracer produces a raw network of many small segments, this pass
-//! rewrites chains of degree-2 nodes into cleaner geometry:
+//! rewrites the graph into cleaner geometry:
 //!
-//! 1. **Ramer-Douglas-Peucker** decimation removes unnecessary intermediate
+//! 1. **Global Laplacian elevation smoothing** averages node heights across the
+//!    entire graph, producing roads that bridge dips and cut through bumps.
+//!    A maximum grade clamp limits slope between adjacent nodes.
+//! 2. **Artery extraction** traces continuous paths *through* intersections by
+//!    forward-vector alignment, allowing global straightening of avenues.
+//! 3. **Ramer-Douglas-Peucker** decimation removes unnecessary intermediate
 //!    points, straightening nearly-collinear runs.
-//! 2. **Fillet corners** replaces sharp bends with smooth quadratic Bézier arcs,
+//! 4. **Fillet corners** replaces sharp bends with smooth quadratic Bézier arcs,
 //!    giving the network a civil-engineered look.
 //!
 //! The result is a graph whose geometry is already presentation-ready — the 3D
@@ -17,7 +22,9 @@ use symbios_ground::HeightMap;
 
 use crate::geometry::closest_point_on_segment;
 use crate::graph::{EdgeId, NodeId, RoadGraph, RoadType};
-use crate::topology::{compute_active_degrees, extract_arteries, extract_chains, extract_chains_any_type};
+use crate::topology::{
+    compute_active_degrees, extract_arteries, extract_chains, extract_chains_any_type,
+};
 
 /// Configuration for the graph rationalization pass.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -139,7 +146,14 @@ pub fn rationalize_graph(graph: &mut RoadGraph, hm: &HeightMap, config: &Rationa
             if artery.nodes.len() < 3 {
                 continue;
             }
-            rationalize_artery(graph, hm, artery.road_type, &artery.nodes, &artery.edges, config);
+            rationalize_artery(
+                graph,
+                hm,
+                artery.road_type,
+                &artery.nodes,
+                &artery.edges,
+                config,
+            );
         }
     }
 
@@ -149,7 +163,14 @@ pub fn rationalize_graph(graph: &mut RoadGraph, hm: &HeightMap, config: &Rationa
     let chains = extract_chains(graph, &degrees);
 
     for chain in &chains {
-        rationalize_polyline(graph, hm, chain.road_type, &chain.nodes, &chain.edges, config);
+        rationalize_polyline(
+            graph,
+            hm,
+            chain.road_type,
+            &chain.nodes,
+            &chain.edges,
+            config,
+        );
     }
 }
 
@@ -219,7 +240,14 @@ fn rationalize_artery(
     // 4. Inject new smoothed geometry with elevation data.
     let first_node = nodes[0];
     let last_node = *nodes.last().unwrap();
-    let new_edge_ids = inject_polyline(graph, road_type, first_node, last_node, &smoothed, &elevations);
+    let new_edge_ids = inject_polyline(
+        graph,
+        road_type,
+        first_node,
+        last_node,
+        &smoothed,
+        &elevations,
+    );
 
     // 5. Reconnect severed side-streets.
     // For each severed (old_artery_node, side_edge), find the closest point
@@ -263,7 +291,14 @@ fn rationalize_polyline(
 
     let first_node = nodes[0];
     let last_node = *nodes.last().unwrap();
-    inject_polyline(graph, road_type, first_node, last_node, &smoothed, &elevations);
+    inject_polyline(
+        graph,
+        road_type,
+        first_node,
+        last_node,
+        &smoothed,
+        &elevations,
+    );
 }
 
 /// Injects a smoothed polyline into the graph, reusing `first_node` and
@@ -331,7 +366,9 @@ fn smooth_graph_elevations(graph: &mut RoadGraph, hm: &HeightMap, config: &Ratio
         }
         let a = edge.start as usize;
         let b = edge.end as usize;
-        let dist = (graph.nodes[a].position - graph.nodes[b].position).length().max(1e-6);
+        let dist = (graph.nodes[a].position - graph.nodes[b].position)
+            .length()
+            .max(1e-6);
         let weight = 1.0 / dist;
         neighbors[a].push((edge.end, weight));
         neighbors[b].push((edge.start, weight));
@@ -400,10 +437,7 @@ fn smooth_elevations(points: &[Vec2], hm: &HeightMap, config: &RationalizeConfig
     // Use the globally-smoothed heightmap sample as a baseline — the global
     // Laplacian pass has already written stabilized elevations into graph
     // nodes, and new fillet points sample the terrain which is close enough.
-    let mut elevs: Vec<f32> = points
-        .iter()
-        .map(|p| hm.get_height_at(p.x, p.y))
-        .collect();
+    let mut elevs: Vec<f32> = points.iter().map(|p| hm.get_height_at(p.x, p.y)).collect();
 
     // Light local smoothing to blend fillet points with their neighbors.
     for _ in 0..3_u32.min(config.elevation_smooth_passes) {
@@ -524,7 +558,12 @@ fn reconnect_side_streets(
 }
 
 /// Rewires one endpoint of an edge from `old_node` to `new_node`.
-fn rewire_edge_endpoint(graph: &mut RoadGraph, edge_id: EdgeId, old_node: NodeId, new_node: NodeId) {
+fn rewire_edge_endpoint(
+    graph: &mut RoadGraph,
+    edge_id: EdgeId,
+    old_node: NodeId,
+    new_node: NodeId,
+) {
     // Update the edge's endpoint.
     let edge = &mut graph.edges[edge_id as usize];
     if edge.start == old_node {
@@ -536,7 +575,9 @@ fn rewire_edge_endpoint(graph: &mut RoadGraph, edge_id: EdgeId, old_node: NodeId
     }
 
     // Update adjacency lists.
-    graph.nodes[old_node as usize].edges.retain(|&e| e != edge_id);
+    graph.nodes[old_node as usize]
+        .edges
+        .retain(|&e| e != edge_id);
     graph.nodes[new_node as usize].edges.push(edge_id);
 }
 
@@ -555,7 +596,13 @@ pub fn ramer_douglas_peucker(points: &[Vec2], tolerance: f32) -> Vec<Vec2> {
     keep[0] = true;
     keep[points.len() - 1] = true;
 
-    rdp_recurse(points, 0, points.len() - 1, tolerance * tolerance, &mut keep);
+    rdp_recurse(
+        points,
+        0,
+        points.len() - 1,
+        tolerance * tolerance,
+        &mut keep,
+    );
 
     points
         .iter()
@@ -578,7 +625,12 @@ fn rdp_recurse(points: &[Vec2], start: usize, end: usize, tol_sq: f32, keep: &mu
     let mut max_dist_sq = 0.0f32;
     let mut max_idx = start;
 
-    for (i, pt) in points.iter().enumerate().skip(start + 1).take(end - start - 1) {
+    for (i, pt) in points
+        .iter()
+        .enumerate()
+        .skip(start + 1)
+        .take(end - start - 1)
+    {
         let dist_sq = if ab_len_sq < 1e-12 {
             (*pt - a).length_squared()
         } else {
@@ -617,10 +669,7 @@ pub fn fillet_corners(points: &[Vec2], radius: f32, segments: u32) -> Vec<Vec2> 
     let segments = segments.max(1);
 
     // Pre-compute segment lengths for setback clamping.
-    let seg_lengths: Vec<f32> = points
-        .windows(2)
-        .map(|w| (w[1] - w[0]).length())
-        .collect();
+    let seg_lengths: Vec<f32> = points.windows(2).map(|w| (w[1] - w[0]).length()).collect();
 
     let mut result = Vec::with_capacity(n + (n - 2) * segments as usize);
     result.push(points[0]);
@@ -789,15 +838,15 @@ mod tests {
         // Build a zigzag chain: A -- B -- C -- D
         // Where B is slightly off the straight line A→D.
         let mut g = RoadGraph::default();
-        let _a = g.add_node(Vec2::new(0.0, 0.0));       // 0
-        let _b = g.add_node(Vec2::new(10.0, 0.5));      // 1 - slight deviation
-        let _c = g.add_node(Vec2::new(20.0, 0.0));      // 2
-        let _d = g.add_node(Vec2::new(30.0, 0.0));      // 3
+        let _a = g.add_node(Vec2::new(0.0, 0.0)); // 0
+        let _b = g.add_node(Vec2::new(10.0, 0.5)); // 1 - slight deviation
+        let _c = g.add_node(Vec2::new(20.0, 0.0)); // 2
+        let _d = g.add_node(Vec2::new(30.0, 0.0)); // 3
 
         // Make A and D true junctions (degree >= 3) with two stubs each.
-        let stub_a1 = g.add_node(Vec2::new(-10.0, 0.0));  // 4
-        let stub_a2 = g.add_node(Vec2::new(0.0, -10.0));  // 5
-        let stub_d1 = g.add_node(Vec2::new(40.0, 0.0));   // 6
+        let stub_a1 = g.add_node(Vec2::new(-10.0, 0.0)); // 4
+        let stub_a2 = g.add_node(Vec2::new(0.0, -10.0)); // 5
+        let stub_d1 = g.add_node(Vec2::new(40.0, 0.0)); // 6
         let stub_d2 = g.add_node(Vec2::new(30.0, -10.0)); // 7
         g.add_edge(stub_a1, _a, RoadType::Major);
         g.add_edge(stub_a2, _a, RoadType::Major);
@@ -845,10 +894,7 @@ mod tests {
             .iter()
             .filter(|e| e.active && e.road_type == RoadType::Major)
             .collect();
-        assert!(
-            !active_major.is_empty(),
-            "should have active Major edges"
-        );
+        assert!(!active_major.is_empty(), "should have active Major edges");
     }
 
     #[test]
@@ -860,9 +906,9 @@ mod tests {
         // B and D are T-junctions (degree 3).
         let mut g = RoadGraph::default();
         let _a = g.add_node(Vec2::new(0.0, 0.0));
-        let _b = g.add_node(Vec2::new(10.0, 0.3));  // slight wobble
+        let _b = g.add_node(Vec2::new(10.0, 0.3)); // slight wobble
         let _c = g.add_node(Vec2::new(20.0, 0.0));
-        let _d = g.add_node(Vec2::new(30.0, 0.2));  // slight wobble
+        let _d = g.add_node(Vec2::new(30.0, 0.2)); // slight wobble
         let _e = g.add_node(Vec2::new(40.0, 0.0));
 
         // Minor side-streets
@@ -870,10 +916,10 @@ mod tests {
         let s2 = g.add_node(Vec2::new(30.0, -15.0));
 
         // Major avenue edges
-        g.add_edge(_a, _b, RoadType::Major);  // 0
-        g.add_edge(_b, _c, RoadType::Major);  // 1
-        g.add_edge(_c, _d, RoadType::Major);  // 2
-        g.add_edge(_d, _e, RoadType::Major);  // 3
+        g.add_edge(_a, _b, RoadType::Major); // 0
+        g.add_edge(_b, _c, RoadType::Major); // 1
+        g.add_edge(_c, _d, RoadType::Major); // 2
+        g.add_edge(_d, _e, RoadType::Major); // 3
 
         // Minor side-streets
         g.add_edge(_b, s1, RoadType::Minor); // 4
@@ -914,7 +960,11 @@ mod tests {
             .iter()
             .filter(|e| e.active && e.road_type == RoadType::Minor)
             .collect();
-        assert_eq!(active_minor.len(), 2, "should have 2 active Minor side-streets");
+        assert_eq!(
+            active_minor.len(),
+            2,
+            "should have 2 active Minor side-streets"
+        );
 
         // s1 and s2 must each have an active edge.
         for &leaf in &[s1, s2] {
@@ -922,7 +972,10 @@ mod tests {
                 .edges
                 .iter()
                 .any(|&eid| g.edges[eid as usize].active);
-            assert!(has_active, "side-street leaf node {leaf} should be connected");
+            assert!(
+                has_active,
+                "side-street leaf node {leaf} should be connected"
+            );
         }
     }
 }

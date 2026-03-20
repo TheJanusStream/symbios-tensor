@@ -3,7 +3,7 @@ name = "symbios-tensor"
 version = "0.1.0"
 edition = "2024"
 authors = ["Janus"]
-description = "A tensor-based procedural generation engine for urban layouts."
+description = "A procedural generation engine for urban layouts."
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/TheJanusStream/symbios-tensor"
@@ -14,7 +14,7 @@ categories = ["simulation", "game-development", "mathematics"]
 glam = { version = "0.30.10", features = ["serde"] }
 rand = "0.9"
 rand_pcg = "0.9"
-symbios-ground = { path = "../symbios-ground" }
+symbios-ground = "0.2"
 serde = { version = "1.0", features = ["derive", "rc"] }
 
 [dev-dependencies]
