@@ -78,10 +78,14 @@ rationalize_graph(&mut graph, &heightmap, &RationalizeConfig::default());
 extract_blocks(&mut graph);
 
 // 4. Subdivide blocks into building lots
-let lots = extract_lots(&graph, &heightmap, config.water_level, &LotConfig::default());
+let mut hm = heightmap;
+let lot_config = LotConfig {
+    water_level: config.water_level,
+    ..LotConfig::default()
+};
+let lots = extract_lots(&graph, &mut hm, &lot_config);
 
 // 5. Carve roads and lots into terrain
-let mut hm = heightmap;
 let road_mask = carve_roads(&graph, &mut hm, &RoadMeshConfig::default(), 4.0);
 carve_lots(&lots, &mut hm, 2.0, Some(&road_mask));
 
@@ -95,81 +99,114 @@ let meshes = generate_road_meshes(&graph, &hm, &RoadMeshConfig::default());
 // meshes.skirts  — embankment skirt meshes
 ```
 
+## End-to-end example
+
+For the canonical walkthrough of every stage, see
+[`examples/full_city.rs`](examples/full_city.rs):
+
+```bash
+cargo run --release --example full_city
+```
+
+It builds a 96×96 heightmap with topographical variety, runs the
+complete pipeline, and writes hand-rolled outputs in the working
+directory:
+
+- `full_city_graph.ppm` — top-down RGB view of roads + lot footprints
+- `full_city_roads.obj` — Wavefront OBJ of the 3D road meshes
+- `full_city_lots.svg` — SVG diagram of building lot footprints
+
+The example completes in well under a second on a typical laptop and
+prints stage timings, so it doubles as a smoke test.
+
+## Streaming for large worlds
+
+For 10×10 km open-world regions where the entire road graph won't fit
+in memory, use [`CityStreamer`](src/streaming.rs). The streamer divides
+the world into square tiles, generates each on demand from a heightmap
+callback, caches results, and provides query / eviction APIs. Per-tile
+seeds are derived deterministically from a base seed so the same input
+always produces the same world. Cross-tile seamless tracing is not
+implemented — tile boundaries currently produce visible seams.
+
 ## Configuration
 
 ### `TensorConfig`
 
-| Field | Default | Description |
-|---|---|---|
-| `seed` | `42` | RNG seed for jittered seed placement |
-| `step_size` | `2.0` | World-space distance per integration step |
-| `major_road_dist` | `40.0` | Spacing between parallel major roads (avenues) |
-| `minor_road_dist` | `15.0` | Spacing between parallel minor roads (streets) |
-| `snap_radius` | `4.0` | Merge radius for snapping trace endpoints to existing geometry |
-| `max_trace_steps` | `300` | Maximum integration steps per trace before abandoning |
-| `tracer_inertia` | `0.8` | Momentum factor (0.0–0.99) for the tracer direction; higher values resist sharp changes from terrain noise, producing smoother roads |
-| `water_level` | `-inf` | World-space Y height of the water plane; terrain at or below this is treated as underwater |
+| Field                      | Default | Description                                                                                                                          |
+|----------------------------|---------|--------------------------------------------------------------------------------------------------------------------------------------|
+| `seed`                     | `42`    | RNG seed for jittered seed placement                                                                                                 |
+| `step_size`                | `2.0`   | World-space distance per integration step                                                                                            |
+| `major_road_dist`          | `40.0`  | Spacing between parallel major roads (avenues)                                                                                       |
+| `minor_road_dist`          | `15.0`  | Spacing between parallel minor roads (streets)                                                                                       |
+| `snap_radius`              | `4.0`   | Merge radius for snapping trace endpoints to existing geometry                                                                       |
+| `max_trace_steps`          | `300`   | Maximum integration steps per trace before abandoning                                                                                |
+| `tracer_inertia`           | `0.8`   | Momentum factor (0.0–0.99) for the tracer direction; higher values resist sharp changes from terrain noise, producing smoother roads |
+| `water_level`              | `-inf`  | World-space Y height of the water plane; terrain at or below this is treated as underwater                                           |
 
 ### `LotConfig`
 
-| Field | Default | Description |
-|---|---|---|
-| `max_lot_area` | `400.0` | Maximum lot area (sqm) before recursive subdivision |
-| `min_lot_area` | `50.0` | Minimum lot area — polygons below this are discarded |
-| `front_setback` | `3.0` | Distance from street edge to building front |
-| `side_setback` | `1.5` | Distance from side edges to building sides |
-| `rear_setback` | `2.0` | Distance from back edge to building rear |
-| `min_width` | `6.0` | Minimum building width (along street) |
-| `min_depth` | `6.0` | Minimum building depth (perpendicular to street) |
+| Field           | Default | Description                                                                                                                                                                                             |
+|-----------------|---------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `max_lot_area`  | `400.0` | Maximum lot area (sqm) before recursive subdivision                                                                                                                                                     |
+| `min_lot_area`  | `50.0`  | Minimum lot area — polygons below this are discarded                                                                                                                                                    |
+| `front_setback` | `3.0`   | Distance from street edge to building front                                                                                                                                                             |
+| `side_setback`  | `1.5`   | Distance from side edges to building sides                                                                                                                                                              |
+| `rear_setback`  | `2.0`   | Distance from back edge to building rear                                                                                                                                                                |
+| `min_width`     | `6.0`   | Minimum building width (along street)                                                                                                                                                                   |
+| `min_depth`     | `6.0`   | Minimum building depth (perpendicular to street)                                                                                                                                                        |
+| `water_level`   | `-inf`  | World-space Y height of the water plane. Lots whose footprint reaches at or below this are handled per `water_policy`                                                                                   |
+| `water_policy`  | `Skip`  | `Skip` discards submerged lots; `TagShoreline` keeps and marks them via `BuildingLot::is_shoreline`; `CarveFlush { offset }` additionally lifts heightmap cells under the lot to `water_level + offset` |
 
 ### `RationalizeConfig`
 
-| Field | Default | Description |
-|---|---|---|
-| `enabled` | `true` | Master toggle for rationalization |
-| `rdp_tolerance` | `2.0` | Ramer-Douglas-Peucker tolerance in world units — how aggressively to straighten |
-| `major_fillet_radius` | `20.0` | Fillet radius for major (contour-following) roads |
-| `minor_fillet_radius` | `10.0` | Fillet radius for minor (gradient-following) roads |
-| `fillet_segments` | `6` | Number of line segments used to approximate each fillet arc |
-| `elevation_smooth_passes` | `10` | Global Laplacian smoothing passes applied to the road graph's elevation profile before chain extraction; 0 disables |
-| `max_grade` | `0.15` | Maximum allowed slope between adjacent nodes (e.g. 0.15 = 15% grade); 0.0 disables |
+| Field                     | Default | Description                                                                                                                                   |
+|---------------------------|---------|-----------------------------------------------------------------------------------------------------------------------------------------------|
+| `enabled`                 | `true`  | Master toggle for rationalization                                                                                                             |
+| `rdp_tolerance`           | `2.0`   | Ramer-Douglas-Peucker tolerance in world units — how aggressively to straighten                                                               |
+| `major_fillet_radius`     | `20.0`  | Fillet radius for major (contour-following) roads                                                                                             |
+| `minor_fillet_radius`     | `10.0`  | Fillet radius for minor (gradient-following) roads                                                                                            |
+| `fillet_segments`         | `6`     | Number of line segments used to approximate each fillet arc                                                                                   |
+| `elevation_smooth_passes` | `10`    | Global Laplacian smoothing passes applied to the road graph's elevation profile before chain extraction; 0 disables                           |
+| `max_grade`               | `0.15`  | Maximum allowed slope between adjacent nodes (e.g. 0.15 = 15% grade); 0.0 disables                                                            |
+| `convergence_tolerance`   | `1e-2`  | Early-termination threshold (world units) for the elevation-smoothing and grade-clamping loops. Set to `0.0` for bit-identical pre-#63 output |
 
 ### `RoadMeshConfig`
 
-| Field | Default | Description |
-|---|---|---|
-| `major_half_width` | `3.0` | Half-width of major roads (world units) |
-| `minor_half_width` | `2.0` | Half-width of minor roads (world units) |
-| `hub_sides` | `8` | Number of sides for dead-end cap polygons (e.g. 8 = octagon); degree-3+ intersections use procedural boundary polygons |
-| `depth_bias` | `0.05` | Vertices are raised above terrain by this amount to prevent z-fighting |
-| `texture_scale` | `0.1` | UV texture scale: world units per texture repeat |
-| `spline_subdivisions` | `8` | Legacy: Catmull-Rom subdivisions per graph edge; ignored when the graph has been rationalized |
-| `curb_radius` | `2.0` | Extra radius added to dead-end caps beyond the road half-width, creating a wider turning zone |
-| `skirt` | `SkirtConfig::default()` | Embankment skirt configuration (see below) |
+| Field                 | Default                  | Description                                                                                                            |
+|-----------------------|--------------------------|------------------------------------------------------------------------------------------------------------------------|
+| `major_half_width`    | `3.0`                    | Half-width of major roads (world units)                                                                                |
+| `minor_half_width`    | `2.0`                    | Half-width of minor roads (world units)                                                                                |
+| `hub_sides`           | `8`                      | Number of sides for dead-end cap polygons (e.g. 8 = octagon); degree-3+ intersections use procedural boundary polygons |
+| `depth_bias`          | `0.05`                   | Vertices are raised above terrain by this amount to prevent z-fighting                                                 |
+| `texture_scale`       | `0.1`                    | UV texture scale: world units per texture repeat                                                                       |
+| `spline_subdivisions` | `8`                      | Legacy: Catmull-Rom subdivisions per graph edge; ignored when the graph has been rationalized                          |
+| `curb_radius`         | `2.0`                    | Extra radius added to dead-end caps beyond the road half-width, creating a wider turning zone                          |
+| `skirt`               | `SkirtConfig::default()` | Embankment skirt configuration (see below)                                                                             |
 
 ### `SkirtConfig`
 
-| Field | Default | Description |
-|---|---|---|
-| `width` | `3.0` | Width of the skirt extending outward from the road edge (world units) |
-| `bury_depth` | `0.5` | How far below the terrain surface the skirt buries itself |
+| Field        | Default | Description                                                           |
+|--------------|---------|-----------------------------------------------------------------------|
+| `width`      | `3.0`   | Width of the skirt extending outward from the road edge (world units) |
+| `bury_depth` | `0.5`   | How far below the terrain surface the skirt buries itself             |
 
 ## Module overview
 
-| Module | Purpose |
-|---|---|
-| `tensor` | Tensor field sampling from heightmap normals (major/minor directions) |
-| `tracer` | Streamline tracing with RK2 integration, branching, and snap logic |
-| `graph` | Arena-based road graph (`RoadNode`, `RoadEdge`, `CityBlock`) |
-| `spatial` | Spatial hash grid for O(1) proximity and intersection queries |
-| `geometry` | Segment intersection and closest-point primitives |
+| Module        | Purpose                                                                                                                               |
+|---------------|---------------------------------------------------------------------------------------------------------------------------------------|
+| `tensor`      | Tensor field sampling from heightmap normals (major/minor directions)                                                                 |
+| `tracer`      | Streamline tracing with RK2 integration, branching, and snap logic                                                                    |
+| `graph`       | Arena-based road graph (`RoadNode`, `RoadEdge`, `CityBlock`)                                                                          |
+| `spatial`     | Spatial hash grid for O(1) proximity and intersection queries                                                                         |
+| `geometry`    | Segment intersection and closest-point primitives                                                                                     |
 | `rationalize` | RDP decimation, Bézier fillet smoothing, Laplacian elevation smoothing, grade clamping, and artery-through-intersection straightening |
-| `topology` | Shared topology helpers: chain extraction, artery extraction, active degree computation |
-| `polygons` | Minimum-cycle-basis block extraction and centroid computation |
-| `lots` | Recursive subdivision, frontage detection, inscribed box, setbacks |
-| `carve` | Heightmap flattening for roads and building foundations |
-| `prune` | Steiner-tree road pruning to remove unused roads |
-| `roads_3d` | Engine-agnostic 3D mesh generation (hubs, ribbons, embankment skirts) |
+| `topology`    | Shared topology helpers: chain extraction, artery extraction, active degree computation                                               |
+| `polygons`    | Minimum-cycle-basis block extraction and centroid computation                                                                         |
+| `lots`        | Recursive subdivision, frontage detection, inscribed box, setbacks                                                                    |
+| `carve`       | Heightmap flattening for roads and building foundations                                                                               |
+| `prune`       | Steiner-tree road pruning to remove unused roads                                                                                      |
+| `roads_3d`    | Engine-agnostic 3D mesh generation (hubs, ribbons, embankment skirts)                                                                 |
 
 ## Dependencies
 

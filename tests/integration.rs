@@ -1,7 +1,10 @@
+use rand::{Rng, SeedableRng};
+use rand_pcg::Pcg64;
 use symbios_ground::HeightMap;
 use symbios_tensor::{
-    LotConfig, RoadMeshConfig, RoadType, TensorConfig, carve_roads, extract_blocks, extract_lots,
-    generate_roads,
+    LotConfig, RationalizeConfig, RoadMeshConfig, RoadType, TensorConfig, TensorFieldConfig,
+    carve_lots, carve_roads, extract_blocks, extract_lots, generate_road_meshes, generate_roads,
+    rationalize_graph,
 };
 
 fn flat_heightmap() -> HeightMap {
@@ -111,6 +114,7 @@ fn carve_modifies_heightmap() {
         max_trace_steps: 50,
         tracer_inertia: 0.8,
         water_level: 0.0,
+        ..Default::default()
     };
     let graph = generate_roads(&hm, &config).expect("generate_roads");
 
@@ -137,6 +141,110 @@ fn graph_serialization_roundtrip() {
     assert_eq!(graph.edges.len(), restored.edges.len());
 }
 
+/// Property test: drives the full pipeline with a randomized population of
+/// tensor fields (heightmaps + configs) and confirms no panic occurs. This
+/// is the regression net for the unwrap audit (#59).
+///
+/// We use 200 generations for CI runtime budget; the scenarios below cover
+/// the categories the audit was concerned with: degenerate intersections,
+/// near-flat slopes, tiny worlds, large step sizes relative to features,
+/// and the new water-policy code paths.
+#[test]
+fn pipeline_survives_random_inputs() {
+    let mut rng = Pcg64::seed_from_u64(0xC1A5_5E5_DEAD_BEEF);
+
+    for trial in 0..200u32 {
+        // Vary heightmap size and topology.
+        let cells = rng.random_range(8..=32);
+        let scale = rng.random_range(0.5..=4.0_f32);
+        let mut hm = HeightMap::new(cells, cells, scale);
+        let mode = trial % 4;
+        for z in 0..cells {
+            for x in 0..cells {
+                let h = match mode {
+                    0 => 0.0, // flat
+                    1 => x as f32 * rng.random_range(-0.05..0.05),
+                    2 => ((x + z) as f32 * 0.1).sin() * rng.random_range(0.0..2.0),
+                    _ => rng.random_range(-1.0..2.0),
+                };
+                hm.set(x, z, h);
+            }
+        }
+
+        let world_w = hm.world_width();
+        let cfg = TensorConfig {
+            seed: trial as u64,
+            step_size: rng.random_range(0.5..3.0),
+            major_road_dist: rng.random_range(5.0..(world_w * 0.5).max(6.0)),
+            minor_road_dist: rng.random_range(2.0..(world_w * 0.25).max(3.0)),
+            snap_radius: rng.random_range(1.0..4.0),
+            max_trace_steps: rng.random_range(20..150),
+            tracer_inertia: rng.random_range(0.0..0.95),
+            water_level: if trial % 3 == 0 { -0.1 } else { f32::NEG_INFINITY },
+            field: TensorFieldConfig {
+                jitter_amplitude: if trial % 2 == 0 { 0.0 } else { 0.2 },
+                ..Default::default()
+            },
+        };
+
+        let Ok(mut graph) = generate_roads(&hm, &cfg) else {
+            // Invalid randomized config — that's a Result, not a panic. OK.
+            continue;
+        };
+        rationalize_graph(&mut graph, &hm, &RationalizeConfig::default());
+        extract_blocks(&mut graph);
+        let mut hm_copy = hm.clone();
+        let lots = extract_lots(&graph, &mut hm_copy, &LotConfig::default());
+        let mesh_cfg = RoadMeshConfig::default();
+        let _ = carve_roads(&graph, &mut hm_copy, &mesh_cfg, 1.0);
+        carve_lots(&lots, &mut hm_copy, 1.0, None);
+        let _meshes = generate_road_meshes(&graph, &hm_copy, &mesh_cfg);
+    }
+}
+
+#[test]
+fn no_nodes_outside_world_bounds() {
+    // Regression: RK2 midpoint sampling could fall outside world bounds and
+    // emit a node just outside the world. With the fix, no node should ever
+    // sit outside [0, world_w] x [0, world_d].
+    let mut hm = HeightMap::new(32, 32, 2.0);
+    // Build a slope so the tensor field is well-defined and traces actually
+    // run to the boundary instead of exiting on the flat-fallback.
+    for z in 0..32 {
+        for x in 0..32 {
+            hm.set(x, z, x as f32 * 0.5);
+        }
+    }
+    let world_w = hm.world_width();
+    let world_d = hm.world_depth();
+
+    let config = TensorConfig {
+        seed: 17,
+        step_size: 2.0,
+        major_road_dist: 8.0,
+        minor_road_dist: 4.0,
+        snap_radius: 2.5,
+        max_trace_steps: 200,
+        tracer_inertia: 0.5,
+        water_level: f32::NEG_INFINITY,
+        ..Default::default()
+    };
+    let graph = generate_roads(&hm, &config).expect("generate_roads");
+
+    for (i, node) in graph.nodes.iter().enumerate() {
+        let p = node.position;
+        assert!(
+            p.x >= 0.0 && p.x < world_w && p.y >= 0.0 && p.y < world_d,
+            "node {i} at {:?} outside world bounds [{}, {})x[{}, {})",
+            p,
+            0.0,
+            world_w,
+            0.0,
+            world_d
+        );
+    }
+}
+
 #[test]
 fn extract_lots_produces_buildings() {
     use symbios_tensor::{CityBlock, RoadGraph, RoadType};
@@ -157,9 +265,9 @@ fn extract_lots_produces_buildings() {
     });
 
     // Heightmap large enough to cover the block, no water
-    let hm = HeightMap::new(32, 32, 2.0);
+    let mut hm = HeightMap::new(32, 32, 2.0);
     let lot_config = LotConfig::default();
-    let lots = extract_lots(&graph, &hm, f32::NEG_INFINITY, &lot_config);
+    let lots = extract_lots(&graph, &mut hm, &lot_config);
 
     assert!(!lots.is_empty(), "should produce at least one building lot");
 

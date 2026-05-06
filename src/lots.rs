@@ -34,6 +34,28 @@ const RAY_HIT_EPS: f32 = 1e-4;
 /// than this are treated as degenerate slivers and skipped.
 const MAX_SUBDIVISION_ASPECT_RATIO: f32 = 20.0;
 
+/// How to handle lots whose footprint touches water.
+///
+/// A lot "touches water" when its centroid or any of its four corners has
+/// terrain elevation at or below [`LotConfig::water_level`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub enum WaterPolicy {
+    /// Discard any lot that touches water. Default behaviour.
+    #[default]
+    Skip,
+    /// Keep the lot but mark it as a shoreline lot via
+    /// [`BuildingLot::is_shoreline`]. The heightmap is not modified.
+    TagShoreline,
+    /// Keep the lot, mark it as shoreline, and lift heightmap cells under
+    /// the lot footprint up to `water_level + offset` so the building sits
+    /// above water. Mutates the heightmap.
+    CarveFlush {
+        /// World-space offset above `water_level` to which submerged cells
+        /// are raised. Must be non-negative.
+        offset: f32,
+    },
+}
+
 /// Configuration for lot subdivision and building footprint extraction.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LotConfig {
@@ -51,6 +73,12 @@ pub struct LotConfig {
     pub min_width: f32,
     /// Minimum building depth (perpendicular to street).
     pub min_depth: f32,
+    /// World-space Y height of the water plane. Lots whose footprint reaches
+    /// at or below this elevation are handled per [`Self::water_policy`].
+    /// Defaults to [`f32::NEG_INFINITY`] (no water filtering).
+    pub water_level: f32,
+    /// Strategy for handling lots whose footprint touches water.
+    pub water_policy: WaterPolicy,
 }
 
 impl Default for LotConfig {
@@ -63,6 +91,8 @@ impl Default for LotConfig {
             rear_setback: 2.0,
             min_width: 6.0,
             min_depth: 6.0,
+            water_level: f32::NEG_INFINITY,
+            water_policy: WaterPolicy::Skip,
         }
     }
 }
@@ -81,18 +111,23 @@ pub struct BuildingLot {
     pub width: f32,
     /// Extent perpendicular to the street.
     pub depth: f32,
+    /// True when the lot's footprint touches water (under
+    /// [`WaterPolicy::TagShoreline`] or [`WaterPolicy::CarveFlush`]).
+    /// Always false under [`WaterPolicy::Skip`] since touching lots are
+    /// discarded.
+    pub is_shoreline: bool,
 }
 
 /// Extracts building lots from city blocks in the road graph.
 ///
 /// Each block polygon is recursively subdivided until pieces are below
 /// `config.max_lot_area`, then a street-aligned inscribed rectangle is
-/// computed with setbacks applied. Lots whose center falls below the
-/// water level are discarded.
+/// computed with setbacks applied. Lots whose footprint touches water are
+/// handled per [`LotConfig::water_policy`]; under [`WaterPolicy::CarveFlush`]
+/// the heightmap is mutated to lift submerged cells.
 pub fn extract_lots(
     graph: &RoadGraph,
-    heightmap: &HeightMap,
-    water_level: f32,
+    heightmap: &mut HeightMap,
     config: &LotConfig,
 ) -> Vec<BuildingLot> {
     let mut lots = Vec::new();
@@ -106,33 +141,131 @@ pub fn extract_lots(
         let sub_polys = subdivide_polygon(&polygon, config.max_lot_area, config.min_lot_area, 10);
 
         for poly in sub_polys {
-            if let Some(lot) = polygon_to_lot(&poly, &polygon, config) {
-                let hw = lot.width * 0.5;
-                let hd = lot.depth * 0.5;
-                let cos = lot.rotation.cos();
-                let sin = lot.rotation.sin();
+            let Some(mut lot) = polygon_to_lot(&poly, &polygon, config) else {
+                continue;
+            };
 
-                let corners = [
-                    Vec2::new(hw * cos - hd * sin, hw * sin + hd * cos),
-                    Vec2::new(hw * cos - (-hd) * sin, hw * sin + (-hd) * cos),
-                    Vec2::new(-hw * cos - hd * sin, -hw * sin + hd * cos),
-                    Vec2::new(-hw * cos - (-hd) * sin, -hw * sin + (-hd) * cos),
-                ];
+            let touches_water = lot_touches_water(&lot, heightmap, config.water_level);
 
-                let is_above_water = heightmap.get_height_at(lot.position.x, lot.position.y)
-                    > water_level
-                    && corners.iter().all(|c| {
-                        heightmap.get_height_at(lot.position.x + c.x, lot.position.y + c.y)
-                            > water_level
-                    });
-
-                if is_above_water {
+            match config.water_policy {
+                WaterPolicy::Skip => {
+                    if touches_water {
+                        continue;
+                    }
+                    lots.push(lot);
+                }
+                WaterPolicy::TagShoreline => {
+                    lot.is_shoreline = touches_water;
+                    lots.push(lot);
+                }
+                WaterPolicy::CarveFlush { offset } => {
+                    lot.is_shoreline = touches_water;
+                    if touches_water {
+                        let target = config.water_level + offset.max(0.0);
+                        carve_flush_lot(&lot, heightmap, target);
+                    }
                     lots.push(lot);
                 }
             }
         }
     }
     lots
+}
+
+/// Computes the four world-space corners of a lot's oriented footprint.
+fn lot_corners(lot: &BuildingLot) -> [Vec2; 4] {
+    let hw = lot.width * 0.5;
+    let hd = lot.depth * 0.5;
+    let cos = lot.rotation.cos();
+    let sin = lot.rotation.sin();
+    let rot = |x: f32, y: f32| Vec2::new(x * cos - y * sin, x * sin + y * cos);
+    [
+        lot.position + rot(hw, hd),
+        lot.position + rot(hw, -hd),
+        lot.position + rot(-hw, -hd),
+        lot.position + rot(-hw, hd),
+    ]
+}
+
+/// Returns `true` if the lot's centroid or any corner sits at or below
+/// `water_level` in `heightmap`.
+fn lot_touches_water(lot: &BuildingLot, heightmap: &HeightMap, water_level: f32) -> bool {
+    if !water_level.is_finite() {
+        return false;
+    }
+    if heightmap.get_height_at(lot.position.x, lot.position.y) <= water_level {
+        return true;
+    }
+    lot_corners(lot)
+        .iter()
+        .any(|c| heightmap.get_height_at(c.x, c.y) <= water_level)
+}
+
+/// Lifts every heightmap cell whose center lies inside the lot's oriented
+/// footprint to at least `target_height`.
+fn carve_flush_lot(lot: &BuildingLot, heightmap: &mut HeightMap, target_height: f32) {
+    let scale = heightmap.scale();
+    if scale <= 0.0 {
+        return;
+    }
+    let world_w = heightmap.world_width();
+    let world_d = heightmap.world_depth();
+
+    // Expand the OBB by one cell on each side so bilinear samples taken at
+    // any point inside the lot read only lifted cells. `HeightMap` anchors
+    // cell value (i, j) at world (i*scale, j*scale); a cell contributes to
+    // bilinear samples within `scale` of its anchor in each axis.
+    let cos = lot.rotation.cos();
+    let sin = lot.rotation.sin();
+    let hw = lot.width * 0.5 + scale;
+    let hd = lot.depth * 0.5 + scale;
+
+    let corners = lot_corners(lot);
+    let mut min_pt = corners[0];
+    let mut max_pt = corners[0];
+    for &c in &corners[1..] {
+        min_pt = min_pt.min(c);
+        max_pt = max_pt.max(c);
+    }
+    min_pt -= Vec2::splat(scale);
+    max_pt += Vec2::splat(scale);
+    min_pt = min_pt.max(Vec2::ZERO);
+    max_pt = max_pt.min(Vec2::new(world_w, world_d));
+    if min_pt.x >= max_pt.x || min_pt.y >= max_pt.y {
+        return;
+    }
+
+    let cells_x = (world_w / scale) as usize;
+    let cells_z = (world_d / scale) as usize;
+    let x_start = (min_pt.x / scale).floor() as isize;
+    let x_end = (max_pt.x / scale).ceil() as isize;
+    let z_start = (min_pt.y / scale).floor() as isize;
+    let z_end = (max_pt.y / scale).ceil() as isize;
+
+    for cz in z_start..=z_end {
+        if cz < 0 || (cz as usize) >= cells_z {
+            continue;
+        }
+        for cx in x_start..=x_end {
+            if cx < 0 || (cx as usize) >= cells_x {
+                continue;
+            }
+            // Cell anchor in world space (matches HeightMap's bilinear convention).
+            let wx = cx as f32 * scale;
+            let wz = cz as f32 * scale;
+            let dx = wx - lot.position.x;
+            let dz = wz - lot.position.y;
+            // Rotate world delta into lot-local frame (inverse rotation).
+            let lx = dx * cos + dz * sin;
+            let lz = -dx * sin + dz * cos;
+            if lx.abs() <= hw && lz.abs() <= hd {
+                let h = heightmap.get(cx as usize, cz as usize);
+                if h < target_height {
+                    heightmap.set(cx as usize, cz as usize, target_height);
+                }
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -204,8 +337,8 @@ fn longest_edge_index(vertices: &[Vec2]) -> usize {
 /// Removes consecutive vertices that are closer than [`DEDUP_TOLERANCE`] apart.
 fn dedup_consecutive(poly: &mut Vec<Vec2>) {
     poly.dedup_by(|a, b| a.distance(*b) < DEDUP_TOLERANCE);
-    // Also check wrap-around (last vs first)
-    if poly.len() > 1 && poly.first().unwrap().distance(*poly.last().unwrap()) < DEDUP_TOLERANCE {
+    // Also check wrap-around (last vs first).
+    if poly.len() > 1 && poly[0].distance(poly[poly.len() - 1]) < DEDUP_TOLERANCE {
         poly.pop();
     }
 }
@@ -263,7 +396,9 @@ fn split_polygon_by_line(
                 }
             }
         }
-        let (i, j) = best_pair.unwrap();
+        // `best_pair` can remain None only if every distance was NaN — in
+        // that case the polygon is too degenerate to split cleanly.
+        let (i, j) = best_pair?;
         intersections = vec![intersections[i], intersections[j]];
     }
 
@@ -581,6 +716,7 @@ fn apply_setbacks(
         rotation,
         width: new_width,
         depth: new_depth,
+        is_shoreline: false,
     })
 }
 
@@ -744,9 +880,123 @@ mod tests {
 
     #[test]
     fn extract_lots_empty_graph() {
-        let hm = symbios_ground::HeightMap::new(8, 8, 1.0);
+        let mut hm = symbios_ground::HeightMap::new(8, 8, 1.0);
         let graph = RoadGraph::default();
-        let lots = extract_lots(&graph, &hm, 0.0, &LotConfig::default());
+        let lots = extract_lots(&graph, &mut hm, &LotConfig::default());
         assert!(lots.is_empty());
+    }
+
+    fn rect_block_graph() -> (RoadGraph, crate::graph::CityBlock) {
+        use crate::graph::{CityBlock, RoadType};
+        let mut graph = RoadGraph::default();
+        let n0 = graph.add_node(Vec2::new(0.0, 0.0));
+        let n1 = graph.add_node(Vec2::new(30.0, 0.0));
+        let n2 = graph.add_node(Vec2::new(30.0, 20.0));
+        let n3 = graph.add_node(Vec2::new(0.0, 20.0));
+        graph.add_edge(n0, n1, RoadType::Minor);
+        graph.add_edge(n1, n2, RoadType::Minor);
+        graph.add_edge(n2, n3, RoadType::Minor);
+        graph.add_edge(n3, n0, RoadType::Minor);
+        let block = CityBlock {
+            perimeter: vec![n0, n3, n2, n1],
+        };
+        graph.blocks.push(block.clone());
+        (graph, block)
+    }
+
+    #[test]
+    fn skip_policy_drops_submerged_lots() {
+        // Heightmap: half land (x < 16), half lake (x >= 16) at -1.0.
+        let mut hm = symbios_ground::HeightMap::new(32, 16, 2.0);
+        for z in 0..16 {
+            for x in 0..32 {
+                let h = if x < 8 { 1.0 } else { -1.0 };
+                hm.set(x, z, h);
+            }
+        }
+        let (graph, _) = rect_block_graph();
+
+        let cfg = LotConfig {
+            water_level: 0.0,
+            water_policy: WaterPolicy::Skip,
+            ..Default::default()
+        };
+        let lots = extract_lots(&graph, &mut hm, &cfg);
+
+        for lot in &lots {
+            assert!(
+                !lot.is_shoreline,
+                "Skip policy must never produce shoreline-tagged lots"
+            );
+            for c in lot_corners(lot) {
+                assert!(
+                    hm.get_height_at(c.x, c.y) > 0.0,
+                    "Skip policy left a lot with corner under water at {c:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn tag_shoreline_keeps_lots_and_marks_them() {
+        let mut hm = symbios_ground::HeightMap::new(32, 16, 2.0);
+        for z in 0..16 {
+            for x in 0..32 {
+                let h = if x < 8 { 1.0 } else { -1.0 };
+                hm.set(x, z, h);
+            }
+        }
+        let (graph, _) = rect_block_graph();
+
+        let cfg = LotConfig {
+            water_level: 0.0,
+            water_policy: WaterPolicy::TagShoreline,
+            ..Default::default()
+        };
+        let lots = extract_lots(&graph, &mut hm, &cfg);
+
+        // At least one lot must be tagged shoreline (the lake side).
+        assert!(
+            lots.iter().any(|l| l.is_shoreline),
+            "TagShoreline produced no shoreline-tagged lots"
+        );
+        // Heightmap unchanged: still has cells below water.
+        assert!(
+            hm.data().iter().any(|&h| h < 0.0),
+            "TagShoreline must not modify the heightmap"
+        );
+    }
+
+    #[test]
+    fn carve_flush_lifts_heightmap_and_tags() {
+        let mut hm = symbios_ground::HeightMap::new(32, 16, 2.0);
+        for z in 0..16 {
+            for x in 0..32 {
+                let h = if x < 8 { 1.0 } else { -1.0 };
+                hm.set(x, z, h);
+            }
+        }
+        let (graph, _) = rect_block_graph();
+
+        let cfg = LotConfig {
+            water_level: 0.0,
+            water_policy: WaterPolicy::CarveFlush { offset: 0.5 },
+            ..Default::default()
+        };
+        let lots = extract_lots(&graph, &mut hm, &cfg);
+
+        let shoreline_lots: Vec<_> = lots.iter().filter(|l| l.is_shoreline).collect();
+        assert!(
+            !shoreline_lots.is_empty(),
+            "CarveFlush produced no shoreline-tagged lots"
+        );
+        for lot in shoreline_lots {
+            for c in lot_corners(lot) {
+                assert!(
+                    hm.get_height_at(c.x, c.y) >= 0.5 - 1e-3,
+                    "CarveFlush failed to lift corner {c:?} above water_level+offset"
+                );
+            }
+        }
     }
 }

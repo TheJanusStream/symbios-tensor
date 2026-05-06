@@ -52,8 +52,11 @@ fn main() {
     }
 
     // 4. Extract building lots
-    let lot_config = LotConfig::default();
-    let lots = extract_lots(&graph, &hm, config.water_level, &lot_config);
+    let lot_config = LotConfig {
+        water_level: config.water_level,
+        ..Default::default()
+    };
+    let lots = extract_lots(&graph, &mut hm, &lot_config);
     println!("\nBuilding lots: {}", lots.len());
     for (i, lot) in lots.iter().enumerate() {
         println!(

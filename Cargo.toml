@@ -1,6 +1,6 @@
 [package]
 name = "symbios-tensor"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 authors = ["Janus"]
 description = "A procedural generation engine for urban layouts."
@@ -14,7 +14,7 @@ categories = ["simulation", "game-development", "mathematics"]
 glam = { version = "0.30.10", features = ["serde"] }
 rand = "0.9"
 rand_pcg = "0.9"
-symbios-ground = "0.2"
+symbios-ground = { path = "../symbios-ground" }
 serde = { version = "1.0", features = ["derive", "rc"] }
 
 [dev-dependencies]

@@ -17,22 +17,98 @@ use symbios_ground::HeightMap;
 
 use crate::graph::{RoadGraph, RoadType};
 use crate::spatial::{SpatialHash, TraceResult, resolve_trace_step};
-use crate::tensor::TensorField;
+use crate::tensor::{TensorField, TensorFieldConfig};
 
-/// Error returned when [`generate_roads`] receives an invalid configuration.
-#[derive(Debug, Clone)]
-pub struct TensorError {
-    /// Human-readable description of the invalid parameter.
-    pub message: String,
+/// Pipeline stage that produced a [`GenerationError`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GenerationStage {
+    /// Configuration validation in [`generate_roads`].
+    Config,
+    /// Streamline tracing.
+    Tracer,
+    /// Tensor field sampling.
+    Tensor,
+    /// Graph rationalization (RDP, fillet, elevation smoothing).
+    Rationalize,
+    /// Block polygon extraction.
+    Polygons,
+    /// Building lot extraction.
+    Lots,
+    /// Heightmap carving.
+    Carve,
+    /// Road pruning.
+    Prune,
+    /// 3D road mesh generation.
+    Roads3d,
 }
 
-impl fmt::Display for TensorError {
+impl fmt::Display for GenerationStage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "TensorError: {}", self.message)
+        let s = match self {
+            Self::Config => "config",
+            Self::Tracer => "tracer",
+            Self::Tensor => "tensor",
+            Self::Rationalize => "rationalize",
+            Self::Polygons => "polygons",
+            Self::Lots => "lots",
+            Self::Carve => "carve",
+            Self::Prune => "prune",
+            Self::Roads3d => "roads_3d",
+        };
+        f.write_str(s)
     }
 }
 
-impl std::error::Error for TensorError {}
+/// Top-level error type for the city generation pipeline.
+///
+/// Every public entry point that can fail returns
+/// [`Result<_, GenerationError>`]. The variants distinguish recoverable
+/// configuration errors from degenerate input geometry and from internal
+/// invariant violations.
+#[derive(Debug, Clone)]
+pub enum GenerationError {
+    /// A configuration parameter was non-finite, non-positive, or otherwise
+    /// out of the documented valid range.
+    InvalidConfig {
+        /// Pipeline stage that rejected the config.
+        stage: GenerationStage,
+        /// Human-readable description.
+        message: String,
+    },
+    /// Input geometry was degenerate (e.g. NaN coordinates, collinear
+    /// polygon, empty input where one was required).
+    DegenerateInput {
+        /// Pipeline stage that detected the problem.
+        stage: GenerationStage,
+        /// Human-readable description.
+        message: String,
+    },
+    /// Numerical edge case prevented the algorithm from making progress.
+    Numerical {
+        /// Pipeline stage that detected the problem.
+        stage: GenerationStage,
+        /// Human-readable description.
+        message: String,
+    },
+}
+
+impl fmt::Display for GenerationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidConfig { stage, message } => {
+                write!(f, "[{stage}] invalid config: {message}")
+            }
+            Self::DegenerateInput { stage, message } => {
+                write!(f, "[{stage}] degenerate input: {message}")
+            }
+            Self::Numerical { stage, message } => {
+                write!(f, "[{stage}] numerical failure: {message}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for GenerationError {}
 
 /// Configuration for tensor-field city generation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,6 +133,8 @@ pub struct TensorConfig {
     /// Terrain at or below this height is treated as underwater.
     /// Defaults to [`f32::NEG_INFINITY`] (no water).
     pub water_level: f32,
+    /// Tensor field sampling configuration (slope thresholds, jitter).
+    pub field: TensorFieldConfig,
 }
 
 impl Default for TensorConfig {
@@ -70,6 +148,7 @@ impl Default for TensorConfig {
             max_trace_steps: 300,
             tracer_inertia: 0.8,
             water_level: f32::NEG_INFINITY,
+            field: TensorFieldConfig::default(),
         }
     }
 }
@@ -90,46 +169,43 @@ struct Seed {
 ///
 /// # Errors
 ///
-/// Returns [`TensorError`] if any `TensorConfig` parameter is non-positive
-/// (step_size, major_road_dist, minor_road_dist, snap_radius must all be > 0).
+/// Returns [`GenerationError::InvalidConfig`] if any `TensorConfig` parameter
+/// is non-finite or non-positive (step_size, major_road_dist, minor_road_dist,
+/// snap_radius must all be > 0).
 pub fn generate_roads(
     heightmap: &HeightMap,
     config: &TensorConfig,
-) -> Result<RoadGraph, TensorError> {
+) -> Result<RoadGraph, GenerationError> {
+    let cfg_err = |message: String| GenerationError::InvalidConfig {
+        stage: GenerationStage::Config,
+        message,
+    };
     if !config.step_size.is_finite() || config.step_size <= 0.0 {
-        return Err(TensorError {
-            message: format!(
-                "step_size must be finite and positive, got {}",
-                config.step_size
-            ),
-        });
+        return Err(cfg_err(format!(
+            "step_size must be finite and positive, got {}",
+            config.step_size
+        )));
     }
     if !config.major_road_dist.is_finite() || config.major_road_dist <= 0.0 {
-        return Err(TensorError {
-            message: format!(
-                "major_road_dist must be finite and positive, got {}",
-                config.major_road_dist
-            ),
-        });
+        return Err(cfg_err(format!(
+            "major_road_dist must be finite and positive, got {}",
+            config.major_road_dist
+        )));
     }
     if !config.minor_road_dist.is_finite() || config.minor_road_dist <= 0.0 {
-        return Err(TensorError {
-            message: format!(
-                "minor_road_dist must be finite and positive, got {}",
-                config.minor_road_dist
-            ),
-        });
+        return Err(cfg_err(format!(
+            "minor_road_dist must be finite and positive, got {}",
+            config.minor_road_dist
+        )));
     }
     if !config.snap_radius.is_finite() || config.snap_radius <= 0.0 {
-        return Err(TensorError {
-            message: format!(
-                "snap_radius must be finite and positive, got {}",
-                config.snap_radius
-            ),
-        });
+        return Err(cfg_err(format!(
+            "snap_radius must be finite and positive, got {}",
+            config.snap_radius
+        )));
     }
 
-    let field = TensorField::new(heightmap);
+    let field = TensorField::with_config(heightmap, config.field.clone());
     let mut graph = RoadGraph::default();
 
     let world_w = heightmap.world_width();
@@ -253,14 +329,20 @@ fn trace_streamline(
         };
         let k1 = if k1.dot(dir) < 0.0 { -k1 } else { k1 };
 
-        // Sample k2 at midpoint
+        // Sample k2 at midpoint. If the midpoint falls outside world bounds
+        // (tracer near the edge), degrade to forward-Euler for this step
+        // rather than sampling out-of-bounds terrain.
         let mid = current_pos + k1 * (config.step_size * 0.5);
-        let (k2_major, k2_minor) = field.sample(mid.x, mid.y);
-        let k2 = match seed.road_type {
-            RoadType::Major => k2_major,
-            RoadType::Minor => k2_minor,
+        let k2 = if mid.x >= 0.0 && mid.x < bounds.x && mid.y >= 0.0 && mid.y < bounds.y {
+            let (k2_major, k2_minor) = field.sample(mid.x, mid.y);
+            let k2 = match seed.road_type {
+                RoadType::Major => k2_major,
+                RoadType::Minor => k2_minor,
+            };
+            if k2.dot(k1) < 0.0 { -k2 } else { k2 }
+        } else {
+            k1
         };
-        let k2 = if k2.dot(k1) < 0.0 { -k2 } else { k2 };
 
         // Blend with previous direction for momentum (anti-zig-zag).
         let inertia = config.tracer_inertia.clamp(0.0, 0.99);

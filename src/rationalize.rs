@@ -47,6 +47,14 @@ pub struct RationalizeConfig {
     /// Maximum allowed slope (grade) between adjacent nodes, expressed as a
     /// fraction (e.g. 0.15 = 15% grade). 0.0 disables clamping.
     pub max_grade: f32,
+    /// Tolerance (world-space elevation units) for early-terminating the
+    /// elevation-smoothing and grade-clamping passes when they converge
+    /// before reaching the configured maximum. The pass exits as soon as
+    /// the largest single-node delta falls below this value.
+    /// Set to `0.0` to always run the full pass count (bit-identical
+    /// pre-#63 behaviour). Default: `1e-2` (1 cm — far below civil
+    /// engineering precision and well-suited to typical city inputs).
+    pub convergence_tolerance: f32,
 }
 
 impl Default for RationalizeConfig {
@@ -59,6 +67,7 @@ impl Default for RationalizeConfig {
             fillet_segments: 6,
             elevation_smooth_passes: 10,
             max_grade: 0.15,
+            convergence_tolerance: 1e-2,
         }
     }
 }
@@ -238,8 +247,10 @@ fn rationalize_artery(
     }
 
     // 4. Inject new smoothed geometry with elevation data.
+    // Invariant: positions.len() == nodes.len() and we returned early if
+    // positions.len() < 2, so nodes has at least 2 entries here.
     let first_node = nodes[0];
-    let last_node = *nodes.last().unwrap();
+    let last_node = nodes[nodes.len() - 1];
     let new_edge_ids = inject_polyline(
         graph,
         road_type,
@@ -289,8 +300,9 @@ fn rationalize_polyline(
         graph.edges[eid as usize].active = false;
     }
 
+    // Invariant as above: nodes.len() >= 2.
     let first_node = nodes[0];
-    let last_node = *nodes.last().unwrap();
+    let last_node = nodes[nodes.len() - 1];
     inject_polyline(
         graph,
         road_type,
@@ -374,9 +386,12 @@ fn smooth_graph_elevations(graph: &mut RoadGraph, hm: &HeightMap, config: &Ratio
         neighbors[b].push((edge.start, weight));
     }
 
-    // Laplacian smoothing passes.
+    // Laplacian smoothing passes. Track the maximum per-node delta and
+    // break early if the field has converged within `convergence_tolerance`.
     let mut new_elevs = vec![0.0f32; n];
+    let tol = config.convergence_tolerance.max(0.0);
     for _ in 0..config.elevation_smooth_passes {
+        let mut max_delta = 0.0f32;
         for i in 0..n {
             if neighbors[i].is_empty() {
                 new_elevs[i] = graph.nodes[i].elevation;
@@ -391,15 +406,23 @@ fn smooth_graph_elevations(graph: &mut RoadGraph, hm: &HeightMap, config: &Ratio
             // Blend: 50% self + 50% neighbor-weighted average.
             let neighbor_avg = sum / total_weight;
             new_elevs[i] = graph.nodes[i].elevation * 0.5 + neighbor_avg * 0.5;
+            let delta = (new_elevs[i] - graph.nodes[i].elevation).abs();
+            if delta > max_delta {
+                max_delta = delta;
+            }
         }
         for (node, &elev) in graph.nodes.iter_mut().zip(new_elevs.iter()) {
             node.elevation = elev;
+        }
+        if tol > 0.0 && max_delta < tol {
+            break;
         }
     }
 
     // Max grade clamping over edges (forward + backward BFS-order passes).
     if config.max_grade > 0.0 {
         for _ in 0..3 {
+            let mut max_delta = 0.0f32;
             for edge in &graph.edges {
                 if !edge.active {
                     continue;
@@ -410,16 +433,27 @@ fn smooth_graph_elevations(graph: &mut RoadGraph, hm: &HeightMap, config: &Ratio
                 let max_rise = dist * config.max_grade;
                 // Clamp b relative to a.
                 if graph.nodes[b].elevation > graph.nodes[a].elevation + max_rise {
-                    graph.nodes[b].elevation = graph.nodes[a].elevation + max_rise;
+                    let new_b = graph.nodes[a].elevation + max_rise;
+                    max_delta = max_delta.max((graph.nodes[b].elevation - new_b).abs());
+                    graph.nodes[b].elevation = new_b;
                 } else if graph.nodes[b].elevation < graph.nodes[a].elevation - max_rise {
-                    graph.nodes[b].elevation = graph.nodes[a].elevation - max_rise;
+                    let new_b = graph.nodes[a].elevation - max_rise;
+                    max_delta = max_delta.max((graph.nodes[b].elevation - new_b).abs());
+                    graph.nodes[b].elevation = new_b;
                 }
                 // Clamp a relative to b.
                 if graph.nodes[a].elevation > graph.nodes[b].elevation + max_rise {
-                    graph.nodes[a].elevation = graph.nodes[b].elevation + max_rise;
+                    let new_a = graph.nodes[b].elevation + max_rise;
+                    max_delta = max_delta.max((graph.nodes[a].elevation - new_a).abs());
+                    graph.nodes[a].elevation = new_a;
                 } else if graph.nodes[a].elevation < graph.nodes[b].elevation - max_rise {
-                    graph.nodes[a].elevation = graph.nodes[b].elevation - max_rise;
+                    let new_a = graph.nodes[b].elevation - max_rise;
+                    max_delta = max_delta.max((graph.nodes[a].elevation - new_a).abs());
+                    graph.nodes[a].elevation = new_a;
                 }
+            }
+            if tol > 0.0 && max_delta < tol {
+                break;
             }
         }
     }
@@ -440,10 +474,17 @@ fn smooth_elevations(points: &[Vec2], hm: &HeightMap, config: &RationalizeConfig
     let mut elevs: Vec<f32> = points.iter().map(|p| hm.get_height_at(p.x, p.y)).collect();
 
     // Light local smoothing to blend fillet points with their neighbors.
+    let tol = config.convergence_tolerance.max(0.0);
     for _ in 0..3_u32.min(config.elevation_smooth_passes) {
         let prev = elevs.clone();
+        let mut max_delta = 0.0f32;
         for i in 1..n - 1 {
-            elevs[i] = (prev[i - 1] + prev[i] + prev[i + 1]) / 3.0;
+            let new_v = (prev[i - 1] + prev[i] + prev[i + 1]) / 3.0;
+            max_delta = max_delta.max((new_v - elevs[i]).abs());
+            elevs[i] = new_v;
+        }
+        if tol > 0.0 && max_delta < tol {
+            break;
         }
     }
 
@@ -832,6 +873,51 @@ mod tests {
     }
 
     #[test]
+    fn early_termination_preserves_output_on_flat_input() {
+        use crate::graph::RoadGraph;
+
+        // On a flat heightmap, all node elevations start equal → the
+        // Laplacian pass produces zero deltas in iteration 1 and early
+        // termination kicks in. With or without early term, the resulting
+        // elevations must be identical.
+        let mut g = RoadGraph::default();
+        let n0 = g.add_node(Vec2::new(0.0, 0.0));
+        let n1 = g.add_node(Vec2::new(10.0, 0.0));
+        let n2 = g.add_node(Vec2::new(20.0, 0.0));
+        g.add_edge(n0, n1, RoadType::Major);
+        g.add_edge(n1, n2, RoadType::Major);
+
+        let hm = HeightMap::new(32, 32, 1.0);
+
+        let mut g_early = g.clone();
+        let mut g_full = g.clone();
+
+        rationalize_graph(
+            &mut g_early,
+            &hm,
+            &RationalizeConfig {
+                convergence_tolerance: 1e-2,
+                ..Default::default()
+            },
+        );
+        rationalize_graph(
+            &mut g_full,
+            &hm,
+            &RationalizeConfig {
+                convergence_tolerance: 0.0,
+                ..Default::default()
+            },
+        );
+
+        for (a, b) in g_early.nodes.iter().zip(g_full.nodes.iter()) {
+            assert!(
+                (a.elevation - b.elevation).abs() < 1e-5,
+                "early-term and full passes must agree on flat input"
+            );
+        }
+    }
+
+    #[test]
     fn rationalize_simple_chain() {
         use crate::graph::RoadGraph;
 
@@ -864,6 +950,7 @@ mod tests {
             fillet_segments: 4,
             elevation_smooth_passes: 0,
             max_grade: 0.0,
+            convergence_tolerance: 0.0,
         };
 
         let hm = symbios_ground::HeightMap::new(64, 64, 2.0);
@@ -933,6 +1020,7 @@ mod tests {
             fillet_segments: 4,
             elevation_smooth_passes: 0,
             max_grade: 0.0,
+            convergence_tolerance: 0.0,
         };
 
         let hm = symbios_ground::HeightMap::new(64, 64, 2.0);

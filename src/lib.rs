@@ -60,10 +60,10 @@
 //! extract_blocks(&mut graph);
 //!
 //! // 4. Subdivide blocks into building lots
-//! let lots = extract_lots(&graph, &heightmap, config.water_level, &LotConfig::default());
+//! let mut hm = heightmap;
+//! let lots = extract_lots(&graph, &mut hm, &LotConfig::default());
 //!
 //! // 5. Carve roads and lots into terrain
-//! let mut hm = heightmap;
 //! let road_mask = carve_roads(&graph, &mut hm, &RoadMeshConfig::default(), 4.0);
 //! carve_lots(&lots, &mut hm, 2.0, Some(&road_mask));
 //!
@@ -86,16 +86,18 @@ pub mod prune;
 pub mod rationalize;
 pub mod roads_3d;
 pub mod spatial;
+pub mod streaming;
 pub mod tensor;
 pub mod topology;
 pub mod tracer;
 
 pub use carve::{carve_lots, carve_roads};
 pub use graph::{BlockId, CityBlock, EdgeId, NodeId, RoadEdge, RoadGraph, RoadNode, RoadType};
-pub use lots::{BuildingLot, LotConfig, extract_lots};
+pub use lots::{BuildingLot, LotConfig, WaterPolicy, extract_lots};
 pub use polygons::{block_centroid, extract_blocks};
 pub use prune::prune_unused_roads;
 pub use rationalize::{RationalizeConfig, rationalize_graph, unify_road_types};
 pub use roads_3d::{ProceduralMesh, RoadMeshConfig, RoadMeshes, SkirtConfig, generate_road_meshes};
-pub use tensor::TensorField;
-pub use tracer::{TensorConfig, TensorError, generate_roads};
+pub use streaming::{CityStreamer, CityStreamerConfig, CityTile};
+pub use tensor::{TensorField, TensorFieldConfig};
+pub use tracer::{GenerationError, GenerationStage, TensorConfig, generate_roads};

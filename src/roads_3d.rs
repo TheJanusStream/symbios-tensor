@@ -229,11 +229,14 @@ fn compute_truncations(
             continue;
         }
 
-        // Intersection (degree 3+): sort arms by angle.
+        // Intersection (degree 3+): sort arms by angle. Treat any NaN
+        // angle as Equal so degenerate fan inputs don't panic.
         arms.sort_by(|a, b| {
             let angle_a = (-a.1.y).atan2(a.1.x);
             let angle_b = (-b.1.y).atan2(b.1.x);
-            angle_a.partial_cmp(&angle_b).unwrap()
+            angle_a
+                .partial_cmp(&angle_b)
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
 
         let n = arms.len();
@@ -471,8 +474,12 @@ fn generate_hub_procedural(
         return (ProceduralMesh::default(), ProceduralMesh::default());
     }
 
-    // Sort by angle (CCW).
-    arms.sort_by(|a, b| a.angle.partial_cmp(&b.angle).unwrap());
+    // Sort by angle (CCW). NaN-safe.
+    arms.sort_by(|a, b| {
+        a.angle
+            .partial_cmp(&b.angle)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     // Build perimeter: for each arm, emit right corner then left corner.
     // Going CCW, the perimeter order is:
@@ -641,10 +648,12 @@ fn generate_ribbon(
     }
 
     // Look up truncation at each endpoint from the precomputed map.
+    // Invariant: smooth_pts is built from chain.nodes; we returned early
+    // when smooth_pts.len() < 2, so chain.nodes/edges are non-empty.
     let first_node = chain.nodes[0];
-    let last_node = *chain.nodes.last().unwrap();
+    let last_node = chain.nodes[chain.nodes.len() - 1];
     let first_edge = chain.edges[0];
-    let last_edge = *chain.edges.last().unwrap();
+    let last_edge = chain.edges[chain.edges.len() - 1];
 
     let start_trim = truncations
         .get(&(first_node, first_edge))
@@ -682,7 +691,8 @@ fn truncate_polyline_with_elevations(
         let seg_len = (points[i] - points[i - 1]).length();
         arc_lengths.push(arc_lengths[i - 1] + seg_len);
     }
-    let total = *arc_lengths.last().unwrap();
+    // points.len() >= 2 (guarded above), so arc_lengths is non-empty.
+    let total = arc_lengths[arc_lengths.len() - 1];
 
     // Clamp combined trim so it never exceeds 98% of the segment length.
     let max_trim = total * 0.98;
@@ -719,6 +729,9 @@ fn truncate_polyline_with_elevations(
 }
 
 /// Returns the interpolated elevation at a given arc length along a polyline.
+///
+/// Returns `0.0` if `elevations` is empty, which only happens on programmer
+/// error (callers always pass parallel slices to `points`/`arc_lengths`).
 fn elevation_at_arc_length(elevations: &[f32], arc_lengths: &[f32], target: f32) -> f32 {
     for i in 1..elevations.len() {
         if arc_lengths[i] >= target {
@@ -730,10 +743,12 @@ fn elevation_at_arc_length(elevations: &[f32], arc_lengths: &[f32], target: f32)
             return elevations[i - 1] + t * (elevations[i] - elevations[i - 1]);
         }
     }
-    *elevations.last().unwrap()
+    elevations.last().copied().unwrap_or(0.0)
 }
 
 /// Returns the 2D point at a given arc length along a polyline.
+///
+/// Returns `Vec2::ZERO` if `points` is empty (caller-side invariant).
 fn point_at_arc_length(points: &[Vec2], arc_lengths: &[f32], target: f32) -> Vec2 {
     for i in 1..points.len() {
         if arc_lengths[i] >= target {
@@ -745,7 +760,7 @@ fn point_at_arc_length(points: &[Vec2], arc_lengths: &[f32], target: f32) -> Vec
             return points[i - 1].lerp(points[i], t);
         }
     }
-    *points.last().unwrap()
+    points.last().copied().unwrap_or(Vec2::ZERO)
 }
 
 /// Extrudes a 2D polyline into a flat asphalt ribbon and tapered embankment
