@@ -113,8 +113,7 @@ impl<'a> TensorField<'a> {
 
         // Apply low-frequency directional jitter (deterministic per world point).
         let minor = if cfg.jitter_amplitude.abs() > 0.0 {
-            let phase =
-                world_x * cfg.jitter_frequency + world_z * cfg.jitter_frequency * 1.7320508;
+            let phase = world_x * cfg.jitter_frequency + world_z * cfg.jitter_frequency * 1.7320508;
             let angle = cfg.jitter_amplitude * phase.sin();
             rotate(blended_minor, angle)
         } else {

@@ -108,17 +108,19 @@ fn main() {
     let mesh_config = RoadMeshConfig::default();
     let road_mask = carve_roads(&graph, &mut hm, &mesh_config, 4.0);
     carve_lots(&lots, &mut hm, 2.0, Some(&road_mask));
-    println!("[7] Carve: heightmap flattened under network ({:?})", stage.elapsed());
+    println!(
+        "[7] Carve: heightmap flattened under network ({:?})",
+        stage.elapsed()
+    );
 
     // --- 8. 3D road meshes ---------------------------------------------
     let stage = Instant::now();
     let meshes = generate_road_meshes(&graph, &hm, &mesh_config);
     let total_verts =
         meshes.hubs.vertices.len() + meshes.ribbons.vertices.len() + meshes.skirts.vertices.len();
-    let total_tris = (meshes.hubs.indices.len()
-        + meshes.ribbons.indices.len()
-        + meshes.skirts.indices.len())
-        / 3;
+    let total_tris =
+        (meshes.hubs.indices.len() + meshes.ribbons.indices.len() + meshes.skirts.indices.len())
+            / 3;
     println!(
         "[8] Meshes: {} verts / {} triangles ({:?})",
         total_verts,
@@ -128,11 +130,22 @@ fn main() {
 
     // --- 9. Write outputs ----------------------------------------------
     let stage = Instant::now();
-    write_graph_ppm(&graph, &lots, hm.world_width(), hm.world_depth(), "full_city_graph.ppm")
-        .expect("write ppm");
+    write_graph_ppm(
+        &graph,
+        &lots,
+        hm.world_width(),
+        hm.world_depth(),
+        "full_city_graph.ppm",
+    )
+    .expect("write ppm");
     write_meshes_obj(&meshes, "full_city_roads.obj").expect("write obj");
-    write_lots_svg(&lots, hm.world_width(), hm.world_depth(), "full_city_lots.svg")
-        .expect("write svg");
+    write_lots_svg(
+        &lots,
+        hm.world_width(),
+        hm.world_depth(),
+        "full_city_lots.svg",
+    )
+    .expect("write svg");
     println!("[9] Outputs written ({:?})", stage.elapsed());
 
     println!("--- Done in {:?} ---", total.elapsed());
@@ -259,9 +272,7 @@ fn fill_polygon(
     }
     let (min_x, min_y, max_x, max_y) = corners_world.iter().fold(
         (f32::MAX, f32::MAX, f32::MIN, f32::MIN),
-        |(mn_x, mn_y, mx_x, mx_y), &(x, y)| {
-            (mn_x.min(x), mn_y.min(y), mx_x.max(x), mx_y.max(y))
-        },
+        |(mn_x, mn_y, mx_x, mx_y), &(x, y)| (mn_x.min(x), mn_y.min(y), mx_x.max(x), mx_y.max(y)),
     );
     let px_min_x = ((min_x * scale_x).floor() as i32).max(0);
     let px_max_x = ((max_x * scale_x).ceil() as i32).min(res as i32 - 1);
@@ -334,7 +345,12 @@ fn write_meshes_obj(meshes: &RoadMeshes, path: &str) -> std::io::Result<()> {
 
 /// SVG with one `<rect>` per lot (rotated about its center). Top-down
 /// view with the heightmap origin at the SVG origin.
-fn write_lots_svg(lots: &[BuildingLot], world_w: f32, world_d: f32, path: &str) -> std::io::Result<()> {
+fn write_lots_svg(
+    lots: &[BuildingLot],
+    world_w: f32,
+    world_d: f32,
+    path: &str,
+) -> std::io::Result<()> {
     let f = File::create(path)?;
     let mut w = BufWriter::new(f);
     writeln!(
@@ -345,7 +361,11 @@ fn write_lots_svg(lots: &[BuildingLot], world_w: f32, world_d: f32, path: &str) 
     )?;
     for lot in lots {
         let deg = lot.rotation.to_degrees();
-        let fill = if lot.is_shoreline { "#bbd5ff" } else { "#7a8ab5" };
+        let fill = if lot.is_shoreline {
+            "#bbd5ff"
+        } else {
+            "#7a8ab5"
+        };
         writeln!(
             w,
             r##"  <rect x="{x}" y="{y}" width="{ww}" height="{hh}" fill="{fill}" stroke="#222" stroke-width="0.4" transform="rotate({deg} {cx} {cy})"/>"##,

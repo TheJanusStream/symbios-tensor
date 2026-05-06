@@ -180,7 +180,11 @@ fn pipeline_survives_random_inputs() {
             snap_radius: rng.random_range(1.0..4.0),
             max_trace_steps: rng.random_range(20..150),
             tracer_inertia: rng.random_range(0.0..0.95),
-            water_level: if trial % 3 == 0 { -0.1 } else { f32::NEG_INFINITY },
+            water_level: if trial % 3 == 0 {
+                -0.1
+            } else {
+                f32::NEG_INFINITY
+            },
             field: TensorFieldConfig {
                 jitter_amplitude: if trial % 2 == 0 { 0.0 } else { 0.2 },
                 ..Default::default()

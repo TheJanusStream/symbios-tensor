@@ -1,8 +1,6 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use symbios_ground::HeightMap;
-use symbios_tensor::{
-    RationalizeConfig, TensorConfig, generate_roads, rationalize_graph,
-};
+use symbios_tensor::{RationalizeConfig, TensorConfig, generate_roads, rationalize_graph};
 
 fn bench_generate_roads(c: &mut Criterion) {
     let hm = HeightMap::new(64, 64, 2.0);

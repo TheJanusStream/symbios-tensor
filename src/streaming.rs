@@ -131,16 +131,15 @@ where
     /// Returns the integer tile coordinate that contains `world_pos`.
     pub fn tile_coord_for(&self, world_pos: Vec2) -> (i32, i32) {
         let s = self.config.tile_size;
-        ((world_pos.x / s).floor() as i32, (world_pos.y / s).floor() as i32)
+        (
+            (world_pos.x / s).floor() as i32,
+            (world_pos.y / s).floor() as i32,
+        )
     }
 
     /// Generates tile `(tile_x, tile_z)` if not cached and returns a
     /// reference to it.
-    pub fn ensure_tile(
-        &mut self,
-        tile_x: i32,
-        tile_z: i32,
-    ) -> Result<&CityTile, GenerationError> {
+    pub fn ensure_tile(&mut self, tile_x: i32, tile_z: i32) -> Result<&CityTile, GenerationError> {
         if !self.cache.contains_key(&(tile_x, tile_z)) {
             let tile = self.generate_tile(tile_x, tile_z)?;
             self.cache.insert((tile_x, tile_z), tile);
@@ -190,10 +189,7 @@ where
             .cache
             .keys()
             .filter(|&&(tx, tz)| {
-                let tile_center = Vec2::new(
-                    (tx as f32 + 0.5) * s,
-                    (tz as f32 + 0.5) * s,
-                );
+                let tile_center = Vec2::new((tx as f32 + 0.5) * s, (tz as f32 + 0.5) * s);
                 tile_center.distance_squared(center) > max_sq
             })
             .copied()
@@ -205,11 +201,7 @@ where
         n
     }
 
-    fn generate_tile(
-        &mut self,
-        tile_x: i32,
-        tile_z: i32,
-    ) -> Result<CityTile, GenerationError> {
+    fn generate_tile(&mut self, tile_x: i32, tile_z: i32) -> Result<CityTile, GenerationError> {
         let mut heightmap = (self.provider)(tile_x, tile_z);
         let s = self.config.tile_size;
         let provided_w = heightmap.world_width();
