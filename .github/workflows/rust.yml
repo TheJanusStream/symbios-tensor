@@ -15,6 +15,16 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
+      # Reads rust-toolchain.toml, so the runner compiles with the same rustc
+      # the local gate does. Without this step the runner used whatever was
+      # newest and `-D warnings` could go red on a lint that does not exist
+      # locally.
+      - name: Install Rust Toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: rustfmt, clippy
+          cache: false
+
       - name: Check Formatting
         run: cargo fmt -- --check
 

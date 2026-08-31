@@ -1,3 +1,17 @@
 [toolchain]
-channel = "stable"
+# A version, not a channel name.
+#
+# `stable` meant CI compiled with whatever rustc was newest while the local
+# gate ran 1.96.1, so every six-week Rust release could turn `clippy -D
+# warnings` red with no code change here and no way to reproduce it locally.
+# That is not hypothetical: a sibling crate was measured green against 1.96
+# and went red on 1.98 for a lint that did not exist locally.
+#
+# Set to the version the local gate actually runs, so the two agree. Bump it
+# deliberately: raise this line, run the gate, fix the new lints in one sweep.
+#
+# CI reads THIS FILE via actions-rust-lang/setup-rust-toolchain rather than
+# repeating the version in the workflow — a second copy of a pin is a pin that
+# drifts.
+channel = "1.96.1"
 components = ["rustfmt", "clippy"]

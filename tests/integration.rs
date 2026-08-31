@@ -151,7 +151,7 @@ fn graph_serialization_roundtrip() {
 /// and the new water-policy code paths.
 #[test]
 fn pipeline_survives_random_inputs() {
-    let mut rng = Pcg64::seed_from_u64(0xC1A5_5E5_DEAD_BEEF);
+    let mut rng = Pcg64::seed_from_u64(0x0C1A_55E5_DEAD_BEEF);
 
     for trial in 0..200u32 {
         // Vary heightmap size and topology.
