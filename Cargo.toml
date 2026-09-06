@@ -1,6 +1,6 @@
 [package]
 name = "symbios-tensor"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2024"
 authors = ["Janus"]
 description = "A procedural generation engine for urban layouts."
