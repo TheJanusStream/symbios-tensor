@@ -1,6 +1,6 @@
 [package]
 name = "symbios-tensor"
-version = "0.4.1"
+version = "0.5.0"
 edition = "2024"
 authors = ["Janus"]
 description = "A procedural generation engine for urban layouts."
@@ -12,6 +12,7 @@ categories = ["simulation", "game-development", "mathematics"]
 
 [dependencies]
 glam = { version = "0.32", features = ["serde"] }
+libm = "0.2"
 rand = "0.9"
 rand_pcg = "0.9"
 symbios-ground = "0.4"

@@ -135,6 +135,30 @@ pub struct TensorConfig {
     pub water_level: f32,
     /// Tensor field sampling configuration (slope thresholds, jitter).
     pub field: TensorFieldConfig,
+    /// Discs no street may enter (a plaza, a park, a landmark's ground): no
+    /// seed starts in one and a trace ends where its next step would enter
+    /// it, as it does at a shoreline. Empty (the default) keeps nothing
+    /// out. A street can still graze a disc's rim by up to `snap_radius`
+    /// where a trace snaps onto a node beside it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keep_out: Vec<KeepOut>,
+}
+
+/// A disc the tracer keeps every street out of ([`TensorConfig::keep_out`]),
+/// in the heightmap's world frame, the frame the tracer works in.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct KeepOut {
+    /// The disc's centre.
+    pub center: Vec2,
+    /// Its radius, in world units: finite and positive.
+    pub radius: f32,
+}
+
+impl KeepOut {
+    /// Whether `p` lies inside the disc (its rim is outside).
+    pub fn contains(&self, p: Vec2) -> bool {
+        (p - self.center).length_squared() < self.radius * self.radius
+    }
 }
 
 impl Default for TensorConfig {
@@ -149,6 +173,7 @@ impl Default for TensorConfig {
             tracer_inertia: 0.8,
             water_level: f32::NEG_INFINITY,
             field: TensorFieldConfig::default(),
+            keep_out: Vec::new(),
         }
     }
 }
@@ -171,7 +196,10 @@ struct Seed {
 ///
 /// Returns [`GenerationError::InvalidConfig`] if any `TensorConfig` parameter
 /// is non-finite or non-positive (step_size, major_road_dist, minor_road_dist,
-/// snap_radius must all be > 0).
+/// snap_radius must all be > 0), or the field configuration is refused by
+/// [`TensorFieldConfig::validate`] (a bad smoothing, terrain weight or basis
+/// field), or a keep-out disc has a non-finite centre or a radius that is
+/// not finite and positive.
 pub fn generate_roads(
     heightmap: &HeightMap,
     config: &TensorConfig,
@@ -205,6 +233,15 @@ pub fn generate_roads(
         )));
     }
 
+    config.field.validate().map_err(cfg_err)?;
+    for (i, disc) in config.keep_out.iter().enumerate() {
+        if !disc.center.is_finite() || !disc.radius.is_finite() || disc.radius <= 0.0 {
+            return Err(cfg_err(format!(
+                "keep_out[{i}] must have a finite centre and a finite, positive radius, got {disc:?}"
+            )));
+        }
+    }
+
     let field = TensorField::with_config(heightmap, config.field.clone());
     let mut graph = RoadGraph::default();
 
@@ -230,6 +267,12 @@ pub fn generate_roads(
 
             // Do not spawn seeds underwater (at or below water level)
             if heightmap.get_height_at(pos.x, pos.y) <= config.water_level {
+                z += config.major_road_dist;
+                continue;
+            }
+            // Nor in a keep-out disc. Both skips come after the jitter is
+            // drawn, so the stream stays aligned with the grid.
+            if config.keep_out.iter().any(|disc| disc.contains(pos)) {
                 z += config.major_road_dist;
                 continue;
             }
@@ -365,6 +408,11 @@ fn trace_streamline(
 
         // Coastline collision. If the proposed step dips underwater, abort the trace.
         if field.heightmap.get_height_at(proposed.x, proposed.y) <= config.water_level {
+            break;
+        }
+
+        // A keep-out disc ends the trace at its rim, as the shore does.
+        if config.keep_out.iter().any(|disc| disc.contains(proposed)) {
             break;
         }
 

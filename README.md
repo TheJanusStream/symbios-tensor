@@ -143,6 +143,65 @@ implemented — tile boundaries currently produce visible seams.
 | `max_trace_steps`          | `300`   | Maximum integration steps per trace before abandoning                                                                                |
 | `tracer_inertia`           | `0.8`   | Momentum factor (0.0–0.99) for the tracer direction; higher values resist sharp changes from terrain noise, producing smoother roads |
 | `water_level`              | `-inf`  | World-space Y height of the water plane; terrain at or below this is treated as underwater                                           |
+| `field`                    | -       | The tensor field's own settings: [`TensorFieldConfig`](#tensorfieldconfig)                                                           |
+| `keep_out`                 | `[]`    | Discs (`KeepOut { center, radius }`) no street enters - a plaza, a park, a landmark's ground: no seed starts in one and a trace ends at its rim, as at a shoreline (a street can graze the rim by up to `snap_radius`) |
+
+### `TensorFieldConfig`
+
+| Field                 | Default | Description                                                                                                  |
+|-----------------------|---------|--------------------------------------------------------------------------------------------------------------|
+| `flat_threshold_low`  | `1e-4`  | Slope at or below which the field is the pure axis-aligned grid                                              |
+| `flat_threshold_high` | `1e-3`  | Slope at or above which the field is the pure terrain direction                                              |
+| `jitter_amplitude`    | `0.0`   | Low-frequency directional jitter, in radians, to break up parallel streamlines on the flat                    |
+| `jitter_frequency`    | `0.01`  | Spatial frequency of the jitter (cycles per world unit)                                                      |
+| `smoothing`           | `0.0`   | Scale, in world units, below which relief does not steer the field: directions come from a blurred copy      |
+| `terrain_weight`      | `1.0`   | Weight of the terrain's field against the basis fields where they reach (`0` lets them decide alone there)   |
+| `basis`               | `[]`    | Designer fields summed with the terrain's, as tensors (below)                                               |
+
+#### Basis fields and smoothing
+
+The terrain alone decides the streets by default: major roads along the
+contours, minor roads down the slope. Two opt-in controls shape that field,
+and with both left at their defaults a layout traces exactly as it did
+before they existed (`tests/field_golden.rs` pins it).
+
+- **`smoothing`** reads the directions from a copy of the heightmap blurred
+  over about that many world units, so a street follows a hillside instead
+  of turning at every hummock on it. Heights and the water line still come
+  from the heightmap itself.
+- **`basis`** lays designer fields over the terrain's, after Chen et al.
+  (2008), "Interactive Procedural Street Modeling". Directions are summed as
+  tensors `(cos 2θ, sin 2θ)`, so a direction and its reverse are the same,
+  and the road follows the sum's major eigenvector:
+  - `BasisField::Radial { center, radius, strength }` rings major roads
+    round `center` and runs minor roads out from it, the field a lone hill
+    would give without the hill: a plaza with ring boulevards and spokes.
+  - `BasisField::Grid { center, angle, radius, strength }` lays a straight
+    grid with its major roads along `angle` radians (from +X toward +Z).
+
+  Each reaches `radius` world units from its centre, its weight falling
+  smoothly from `strength` to nothing at the edge
+  (`strength * (1 - (d / radius)^2)^2`); outside every field's reach the
+  terrain's own field is returned bit for bit. Coordinates are the
+  heightmap's world frame, as the tracer's are.
+
+```rust
+use glam::Vec2;
+use symbios_tensor::{BasisField, TensorConfig, TensorFieldConfig};
+
+let config = TensorConfig {
+    field: TensorFieldConfig {
+        smoothing: 12.0,
+        basis: vec![BasisField::Radial {
+            center: Vec2::new(256.0, 180.0),
+            radius: 120.0,
+            strength: 1.5,
+        }],
+        ..TensorFieldConfig::default()
+    },
+    ..TensorConfig::default()
+};
+```
 
 ### `LotConfig`
 

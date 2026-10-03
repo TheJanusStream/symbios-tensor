@@ -189,6 +189,16 @@ fn pipeline_survives_random_inputs() {
                 jitter_amplitude: if trial % 2 == 0 { 0.0 } else { 0.2 },
                 ..Default::default()
             },
+            // A keep-out disc on every fourth trial (#69), sized from the
+            // map rather than drawn from `rng`, so no other trial moves.
+            keep_out: if trial % 4 == 1 {
+                vec![symbios_tensor::KeepOut {
+                    center: glam::Vec2::splat(world_w * 0.5),
+                    radius: world_w * 0.2,
+                }]
+            } else {
+                Vec::new()
+            },
         };
 
         let Ok(mut graph) = generate_roads(&hm, &cfg) else {

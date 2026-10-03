@@ -11,7 +11,10 @@
 //!
 //! 1. **Road generation** — [`generate_roads`] seeds streamlines on a jittered
 //!    grid and traces them through a [`TensorField`] using RK2 integration,
-//!    snapping and splitting edges to form a planar [`RoadGraph`].
+//!    snapping and splitting edges to form a planar [`RoadGraph`]. The field
+//!    is the terrain's, optionally steadied by a smoothing scale and shaped
+//!    by designer [`BasisField`]s (ring roads round a centre, a grid at an
+//!    angle) summed with it as tensors.
 //! 2. **Graph rationalization** — [`rationalize_graph`] rewrites the raw tracer
 //!    output into clean geometry: RDP decimation removes unnecessary points,
 //!    quadratic Bézier fillets smooth sharp bends, and elevation profiles are
@@ -99,5 +102,5 @@ pub use prune::prune_unused_roads;
 pub use rationalize::{RationalizeConfig, rationalize_graph, unify_road_types};
 pub use roads_3d::{ProceduralMesh, RoadMeshConfig, RoadMeshes, SkirtConfig, generate_road_meshes};
 pub use streaming::{CityStreamer, CityStreamerConfig, CityTile};
-pub use tensor::{TensorField, TensorFieldConfig};
-pub use tracer::{GenerationError, GenerationStage, TensorConfig, generate_roads};
+pub use tensor::{BasisField, TensorField, TensorFieldConfig};
+pub use tracer::{GenerationError, GenerationStage, KeepOut, TensorConfig, generate_roads};
