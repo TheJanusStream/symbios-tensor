@@ -13,6 +13,7 @@ use symbios_ground::HeightMap;
 
 use crate::geometry::segment_intersection;
 use crate::graph::RoadGraph;
+use crate::math::MathMode;
 
 /// Minimum distance between consecutive polygon vertices after splitting.
 const DEDUP_TOLERANCE: f32 = 1e-4;
@@ -124,12 +125,14 @@ pub struct BuildingLot {
 /// `config.max_lot_area`, then a street-aligned inscribed rectangle is
 /// computed with setbacks applied. Lots whose footprint touches water are
 /// handled per [`LotConfig::water_policy`]; under [`WaterPolicy::CarveFlush`]
-/// the heightmap is mutated to lift submerged cells.
+/// the heightmap is mutated to lift submerged cells. Every lot's frame is
+/// found with the graph's own [`RoadGraph::math`].
 pub fn extract_lots(
     graph: &RoadGraph,
     heightmap: &mut HeightMap,
     config: &LotConfig,
 ) -> Vec<BuildingLot> {
+    let math = graph.math;
     let mut lots = Vec::new();
     for block in &graph.blocks {
         let polygon: Vec<Vec2> = block
@@ -141,11 +144,11 @@ pub fn extract_lots(
         let sub_polys = subdivide_polygon(&polygon, config.max_lot_area, config.min_lot_area, 10);
 
         for poly in sub_polys {
-            let Some(mut lot) = polygon_to_lot(&poly, &polygon, config) else {
+            let Some(mut lot) = polygon_to_lot(&poly, &polygon, config, math) else {
                 continue;
             };
 
-            let touches_water = lot_touches_water(&lot, heightmap, config.water_level);
+            let touches_water = lot_touches_water(&lot, heightmap, config.water_level, math);
 
             match config.water_policy {
                 WaterPolicy::Skip => {
@@ -162,7 +165,7 @@ pub fn extract_lots(
                     lot.is_shoreline = touches_water;
                     if touches_water {
                         let target = config.water_level + offset.max(0.0);
-                        carve_flush_lot(&lot, heightmap, target);
+                        carve_flush_lot(&lot, heightmap, target, math);
                     }
                     lots.push(lot);
                 }
@@ -173,11 +176,11 @@ pub fn extract_lots(
 }
 
 /// Computes the four world-space corners of a lot's oriented footprint.
-fn lot_corners(lot: &BuildingLot) -> [Vec2; 4] {
+fn lot_corners(lot: &BuildingLot, math: MathMode) -> [Vec2; 4] {
     let hw = lot.width * 0.5;
     let hd = lot.depth * 0.5;
-    let cos = lot.rotation.cos();
-    let sin = lot.rotation.sin();
+    let cos = math.cos(lot.rotation);
+    let sin = math.sin(lot.rotation);
     let rot = |x: f32, y: f32| Vec2::new(x * cos - y * sin, x * sin + y * cos);
     [
         lot.position + rot(hw, hd),
@@ -189,21 +192,31 @@ fn lot_corners(lot: &BuildingLot) -> [Vec2; 4] {
 
 /// Returns `true` if the lot's centroid or any corner sits at or below
 /// `water_level` in `heightmap`.
-fn lot_touches_water(lot: &BuildingLot, heightmap: &HeightMap, water_level: f32) -> bool {
+fn lot_touches_water(
+    lot: &BuildingLot,
+    heightmap: &HeightMap,
+    water_level: f32,
+    math: MathMode,
+) -> bool {
     if !water_level.is_finite() {
         return false;
     }
     if heightmap.get_height_at(lot.position.x, lot.position.y) <= water_level {
         return true;
     }
-    lot_corners(lot)
+    lot_corners(lot, math)
         .iter()
         .any(|c| heightmap.get_height_at(c.x, c.y) <= water_level)
 }
 
 /// Lifts every heightmap cell whose center lies inside the lot's oriented
 /// footprint to at least `target_height`.
-fn carve_flush_lot(lot: &BuildingLot, heightmap: &mut HeightMap, target_height: f32) {
+fn carve_flush_lot(
+    lot: &BuildingLot,
+    heightmap: &mut HeightMap,
+    target_height: f32,
+    math: MathMode,
+) {
     let scale = heightmap.scale();
     if scale <= 0.0 {
         return;
@@ -215,12 +228,12 @@ fn carve_flush_lot(lot: &BuildingLot, heightmap: &mut HeightMap, target_height: 
     // any point inside the lot read only lifted cells. `HeightMap` anchors
     // cell value (i, j) at world (i*scale, j*scale); a cell contributes to
     // bilinear samples within `scale` of its anchor in each axis.
-    let cos = lot.rotation.cos();
-    let sin = lot.rotation.sin();
+    let cos = math.cos(lot.rotation);
+    let sin = math.sin(lot.rotation);
     let hw = lot.width * 0.5 + scale;
     let hd = lot.depth * 0.5 + scale;
 
-    let corners = lot_corners(lot);
+    let corners = lot_corners(lot, math);
     let mut min_pt = corners[0];
     let mut max_pt = corners[0];
     for &c in &corners[1..] {
@@ -576,7 +589,11 @@ fn point_on_segment(p: Vec2, a: Vec2, b: Vec2) -> bool {
     p.distance(proj) < POINT_ON_SEG_TOLERANCE
 }
 
-fn inscribed_box(poly: &[Vec2], frontage_idx: usize) -> Option<(Vec2, f32, f32, f32)> {
+fn inscribed_box(
+    poly: &[Vec2],
+    frontage_idx: usize,
+    math: MathMode,
+) -> Option<(Vec2, f32, f32, f32)> {
     let n = poly.len();
     if n < 3 {
         return None;
@@ -590,7 +607,7 @@ fn inscribed_box(poly: &[Vec2], frontage_idx: usize) -> Option<(Vec2, f32, f32, 
     // interior is always to the right of each edge direction.
     let inward_dir = Vec2::new(street_dir.y, -street_dir.x);
 
-    let rotation = street_dir.y.atan2(street_dir.x);
+    let rotation = math.atan2(street_dir.y, street_dir.x);
     let width = (fb - fa).length();
 
     // Compute ray extent from polygon bounding box so rays always reach
@@ -696,6 +713,7 @@ fn apply_setbacks(
     width: f32,
     depth: f32,
     config: &LotConfig,
+    math: MathMode,
 ) -> Option<BuildingLot> {
     let new_width = width - 2.0 * config.side_setback.max(0.0);
     let new_depth = depth - config.front_setback.max(0.0) - config.rear_setback.max(0.0);
@@ -705,7 +723,7 @@ fn apply_setbacks(
     }
 
     // Shift center inward by (front - rear) / 2 to account for asymmetric setbacks
-    let street_dir = Vec2::new(rotation.cos(), rotation.sin());
+    let street_dir = Vec2::new(math.cos(rotation), math.sin(rotation));
     let inward_dir = Vec2::new(street_dir.y, -street_dir.x);
     let depth_shift = (config.front_setback.max(0.0) - config.rear_setback.max(0.0)) * 0.5;
     let adjusted_center = center + inward_dir * depth_shift;
@@ -720,7 +738,12 @@ fn apply_setbacks(
     })
 }
 
-fn polygon_to_lot(poly: &[Vec2], perimeter: &[Vec2], config: &LotConfig) -> Option<BuildingLot> {
+fn polygon_to_lot(
+    poly: &[Vec2],
+    perimeter: &[Vec2],
+    config: &LotConfig,
+    math: MathMode,
+) -> Option<BuildingLot> {
     if poly.len() < 3 {
         return None;
     }
@@ -732,8 +755,16 @@ fn polygon_to_lot(poly: &[Vec2], perimeter: &[Vec2], config: &LotConfig) -> Opti
     let (frontage_idx, _) = find_frontage(poly, perimeter);
     let n = poly.len();
     let frontage_center = (poly[frontage_idx] + poly[(frontage_idx + 1) % n]) * 0.5;
-    let (center, rotation, width, depth) = inscribed_box(poly, frontage_idx)?;
-    apply_setbacks(center, frontage_center, rotation, width, depth, config)
+    let (center, rotation, width, depth) = inscribed_box(poly, frontage_idx, math)?;
+    apply_setbacks(
+        center,
+        frontage_center,
+        rotation,
+        width,
+        depth,
+        config,
+        math,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -825,7 +856,7 @@ mod tests {
             Vec2::new(10.0, 0.0),
         ];
         let (frontage_idx, _) = find_frontage(&rect, &rect);
-        let result = inscribed_box(&rect, frontage_idx);
+        let result = inscribed_box(&rect, frontage_idx, MathMode::Platform);
         assert!(result.is_some());
         let (center, _rotation, width, depth) = result.unwrap();
         assert!(
@@ -848,7 +879,15 @@ mod tests {
             ..Default::default()
         };
         // Width 5 - 2*1.5 = 2 < 6 → filtered
-        let result = apply_setbacks(Vec2::ZERO, Vec2::ZERO, 0.0, 5.0, 20.0, &config);
+        let result = apply_setbacks(
+            Vec2::ZERO,
+            Vec2::ZERO,
+            0.0,
+            5.0,
+            20.0,
+            &config,
+            MathMode::Platform,
+        );
         assert!(result.is_none());
     }
 
@@ -868,7 +907,7 @@ mod tests {
             Vec2::new(10.0, 0.0), // 4 — frontage end
         ];
         let frontage_idx = 4; // edge 4→0: (10,0)→(0,0)
-        let result = inscribed_box(&poly, frontage_idx);
+        let result = inscribed_box(&poly, frontage_idx, MathMode::Platform);
         assert!(result.is_some());
         let (_center, _rotation, _width, depth) = result.unwrap();
         // Depth must be ≤ 2.0 (the notch), not ~5.0 (the far edges).
@@ -928,7 +967,7 @@ mod tests {
                 !lot.is_shoreline,
                 "Skip policy must never produce shoreline-tagged lots"
             );
-            for c in lot_corners(lot) {
+            for c in lot_corners(lot, MathMode::Platform) {
                 assert!(
                     hm.get_height_at(c.x, c.y) > 0.0,
                     "Skip policy left a lot with corner under water at {c:?}"
@@ -991,7 +1030,7 @@ mod tests {
             "CarveFlush produced no shoreline-tagged lots"
         );
         for lot in shoreline_lots {
-            for c in lot_corners(lot) {
+            for c in lot_corners(lot, MathMode::Platform) {
                 assert!(
                     hm.get_height_at(c.x, c.y) >= 0.5 - 1e-3,
                     "CarveFlush failed to lift corner {c:?} above water_level+offset"

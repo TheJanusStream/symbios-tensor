@@ -15,7 +15,10 @@
 //! otherwise fail this test for a reason that has nothing to do with it.
 
 use symbios_ground::HeightMap;
-use symbios_tensor::{RoadGraph, RoadType, TensorConfig, generate_roads};
+use symbios_tensor::{
+    LotConfig, MathMode, RationalizeConfig, RoadGraph, RoadType, TensorConfig, WaterPolicy,
+    extract_blocks, extract_lots, generate_roads, rationalize_graph,
+};
 
 /// A lattice hash in `[0, 1)`: integer mixing only.
 fn lattice(x: i64, z: i64, salt: u32) -> f32 {
@@ -166,4 +169,121 @@ fn the_golden_configs_are_four_different_traces() {
     got.sort_unstable();
     got.dedup();
     assert_eq!(got.len(), 4, "two golden configs trace the same graph");
+}
+
+// --- Portable layouts (#70) -------------------------------------------------
+
+/// Everything a consumer grows buildings from, for `config` traced with
+/// [`MathMode::Portable`]: the graph after `rationalize_graph`, its blocks
+/// and its lots, hashed to the bit - every platform transcendental the
+/// derivation calls (the jitter, the fillets, the edge order, the lots'
+/// frames) on the way.
+fn portable_layout(hm: &HeightMap, config: &TensorConfig, lots: &LotConfig) -> u64 {
+    let config = TensorConfig {
+        math: MathMode::Portable,
+        ..config.clone()
+    };
+    let mut graph = traced(hm, &config);
+    assert_eq!(graph.math, MathMode::Portable, "the trace records its math");
+    rationalize_graph(&mut graph, hm, &RationalizeConfig::default());
+    extract_blocks(&mut graph);
+    let mut ground = hm.clone();
+    let lots = extract_lots(&graph, &mut ground, lots);
+    let mut hash = fingerprint(&graph);
+    let mut eat = |v: u64| {
+        for byte in v.to_le_bytes() {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    };
+    eat(graph.blocks.len() as u64);
+    for block in &graph.blocks {
+        eat(block.perimeter.len() as u64);
+        block.perimeter.iter().for_each(|&n| eat(u64::from(n)));
+    }
+    eat(lots.len() as u64);
+    for lot in &lots {
+        for v in [
+            lot.position.x,
+            lot.position.y,
+            lot.frontage_center.x,
+            lot.frontage_center.y,
+            lot.rotation,
+            lot.width,
+            lot.depth,
+        ] {
+            eat(u64::from(v.to_bits()));
+        }
+        eat(u64::from(lot.is_shoreline));
+    }
+    hash
+}
+
+/// The portable layouts pinned: the base config with the jitter
+/// Overlands' organic streets trace with, and the same over a shoreline
+/// whose lots are tagged where they touch the water.
+fn portable_configs(hm: &HeightMap) -> Vec<(&'static str, TensorConfig, LotConfig)> {
+    let configs = golden_configs(hm);
+    let mut jittered = configs[0].1.clone();
+    jittered.field.jitter_amplitude = 0.15;
+    jittered.tracer_inertia = 0.6;
+    let mut shore = configs[3].1.clone();
+    shore.field.jitter_amplitude = 0.15;
+    let shore_lots = LotConfig {
+        water_level: shore.water_level,
+        water_policy: WaterPolicy::TagShoreline,
+        ..LotConfig::default()
+    };
+    vec![
+        ("jittered", jittered, LotConfig::default()),
+        ("shore", shore, shore_lots),
+    ]
+}
+
+/// The pinned hashes, in `portable_configs` order, on the 128-cell map -
+/// recorded with every platform maths function interposed and nudged three
+/// ulps (an `LD_PRELOAD` shim) and without it, alike, and no platform call
+/// made on the way.
+const PORTABLE_GOLDEN: [u64; 2] = [0x41c7_dc6e_9879_450c, 0x1522_dc0b_249e_8766];
+
+/// A layout traced with [`MathMode::Portable`] derives the same streets,
+/// blocks and lots on every platform. This machine's glibc and CI's answer
+/// `sin`, `acos` and `atan2` differently in the last bit, so a call that
+/// escaped the portable mode would fail this pin on one of them.
+#[test]
+fn a_portable_layout_derives_the_same_lots_on_every_platform() {
+    let hm = rolling_heightmap(128, 2.0, 12.0);
+    let got: Vec<u64> = portable_configs(&hm)
+        .iter()
+        .map(|(name, c, lots)| {
+            let value = portable_layout(&hm, c, lots);
+            println!("portable {name}: {value:#018x}");
+            value
+        })
+        .collect();
+    assert_eq!(
+        got, PORTABLE_GOLDEN,
+        "a portable layout derived differently"
+    );
+}
+
+/// The portable pins hold lots, or they would prove nothing about the lot
+/// frames.
+#[test]
+fn the_portable_layouts_grow_lots() {
+    let hm = rolling_heightmap(128, 2.0, 12.0);
+    for (name, c, lots) in portable_configs(&hm) {
+        let mut graph = traced(
+            &hm,
+            &TensorConfig {
+                math: MathMode::Portable,
+                ..c
+            },
+        );
+        rationalize_graph(&mut graph, &hm, &RationalizeConfig::default());
+        extract_blocks(&mut graph);
+        let mut ground = hm.clone();
+        let grown = extract_lots(&graph, &mut ground, &lots);
+        assert!(grown.len() > 10, "{name} grew {} lots", grown.len());
+    }
 }

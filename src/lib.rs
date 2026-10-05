@@ -44,6 +44,19 @@
 //!    polygons with embankment skirts) and street ribbons (extruded strips
 //!    with flanking skirt meshes).
 //!
+//! # The same layout on every platform
+//!
+//! The trace's jitter, rationalization's fillets, the order block extraction
+//! walks a node's edges in and every lot's frame call `sin`, `cos`, `tan`,
+//! `acos` or `atan2`, and each platform's libm answers those a bit
+//! differently - enough for a lot kept on one machine to be dropped on
+//! another. [`TensorConfig::math`] set to [`MathMode::Portable`] routes them
+//! all through the pure-Rust `libm` crate: [`generate_roads`] records the
+//! mode on the [`RoadGraph`] it returns, and [`rationalize_graph`],
+//! [`extract_blocks`] and [`extract_lots`] follow [`RoadGraph::math`], so a
+//! layout traced portably is derived portably to its lots. The default,
+//! [`MathMode::Platform`], keeps the bits every earlier release produced.
+//!
 //! # Quick start
 //!
 //! ```ignore
@@ -84,6 +97,7 @@ pub mod carve;
 pub mod geometry;
 pub mod graph;
 pub mod lots;
+pub mod math;
 pub mod polygons;
 pub mod prune;
 pub mod rationalize;
@@ -97,6 +111,7 @@ pub mod tracer;
 pub use carve::{carve_lots, carve_roads};
 pub use graph::{BlockId, CityBlock, EdgeId, NodeId, RoadEdge, RoadGraph, RoadNode, RoadType};
 pub use lots::{BuildingLot, LotConfig, WaterPolicy, extract_lots};
+pub use math::MathMode;
 pub use polygons::{block_centroid, extract_blocks};
 pub use prune::prune_unused_roads;
 pub use rationalize::{RationalizeConfig, rationalize_graph, unify_road_types};

@@ -199,6 +199,7 @@ fn pipeline_survives_random_inputs() {
             } else {
                 Vec::new()
             },
+            math: symbios_tensor::MathMode::Platform,
         };
 
         let Ok(mut graph) = generate_roads(&hm, &cfg) else {

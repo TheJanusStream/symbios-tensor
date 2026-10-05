@@ -129,6 +129,32 @@ seeds are derived deterministically from a base seed so the same input
 always produces the same world. Cross-tile seamless tracing is not
 implemented — tile boundaries currently produce visible seams.
 
+## The same layout on every platform
+
+The trace's jitter, rationalization's fillets, the order block extraction
+walks a node's edges in and every lot's frame call `sin`, `cos`, `tan`,
+`acos` or `atan2`, and each platform's libm answers those a little
+differently - glibc, the `wasm32` port and macOS disagree in the last bit,
+and the layout turns such bits into decisions: a lot kept on one machine is
+dropped on another. Set `TensorConfig::math` to `MathMode::Portable` and
+every one of those calls goes through the pure-Rust
+[`libm`](https://crates.io/crates/libm) crate. `generate_roads` records the
+mode on the `RoadGraph` it returns (`RoadGraph::math`), and
+`rationalize_graph`, `extract_blocks` and `extract_lots` follow it, so two
+peers on different platforms derive the same streets, blocks and lots. The
+default, `MathMode::Platform`, keeps the bits every earlier release produced.
+The mode covers the layout; terrain carving and the 3D meshes keep the
+platform's functions - they shape what is drawn, not where anything stands.
+
+```rust
+use symbios_tensor::{MathMode, TensorConfig};
+
+let config = TensorConfig {
+    math: MathMode::Portable,
+    ..TensorConfig::default()
+};
+```
+
 ## Configuration
 
 ### `TensorConfig`
@@ -145,6 +171,7 @@ implemented — tile boundaries currently produce visible seams.
 | `water_level`              | `-inf`  | World-space Y height of the water plane; terrain at or below this is treated as underwater                                           |
 | `field`                    | -       | The tensor field's own settings: [`TensorFieldConfig`](#tensorfieldconfig)                                                           |
 | `keep_out`                 | `[]`    | Discs (`KeepOut { center, radius }`) no street enters - a plaza, a park, a landmark's ground: no seed starts in one and a trace ends at its rim, as at a shoreline (a street can graze the rim by up to `snap_radius`) |
+| `math`                     | `Platform` | Whose `sin`, `cos`, `tan`, `acos` and `atan2` the layout is derived with; `MathMode::Portable` derives the same layout on every platform - see [below](#the-same-layout-on-every-platform) |
 
 ### `TensorFieldConfig`
 
@@ -263,6 +290,7 @@ let config = TensorConfig {
 | `topology`    | Shared topology helpers: chain extraction, artery extraction, active degree computation                                               |
 | `polygons`    | Minimum-cycle-basis block extraction and centroid computation                                                                         |
 | `lots`        | Recursive subdivision, frontage detection, inscribed box, setbacks                                                                    |
+| `math`        | `MathMode`: the platform's transcendental functions or the portable `libm` crate's                                                    |
 | `carve`       | Heightmap flattening for roads and building foundations                                                                               |
 | `prune`       | Steiner-tree road pruning to remove unused roads                                                                                      |
 | `roads_3d`    | Engine-agnostic 3D mesh generation (hubs, ribbons, embankment skirts)                                                                 |
@@ -273,6 +301,7 @@ let config = TensorConfig {
 - [`glam`](https://crates.io/crates/glam) — 2D/3D math (`Vec2`, `Vec3`)
 - [`rand`](https://crates.io/crates/rand) + [`rand_pcg`](https://crates.io/crates/rand_pcg) — deterministic RNG for seed jitter
 - [`serde`](https://crates.io/crates/serde) — serialization for configs, graph, and lots
+- [`libm`](https://crates.io/crates/libm) — portable transcendental functions (`MathMode::Portable`, the basis grid's angle)
 
 ## Known limitations
 

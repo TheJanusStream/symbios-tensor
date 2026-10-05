@@ -9,6 +9,8 @@
 use glam::Vec2;
 use serde::{Deserialize, Serialize};
 
+use crate::math::MathMode;
+
 /// Index into [`RoadGraph::nodes`].
 pub type NodeId = u32;
 /// Index into [`RoadGraph::edges`].
@@ -67,8 +69,8 @@ pub struct CityBlock {
 
 /// The complete road network: nodes, edges, and extracted city blocks.
 ///
-/// All public fields are arena `Vec`s — indices ([`NodeId`], [`EdgeId`],
-/// [`BlockId`]) are stable for the lifetime of the graph.
+/// The arena `Vec`s' indices ([`NodeId`], [`EdgeId`], [`BlockId`]) are
+/// stable for the lifetime of the graph.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RoadGraph {
     /// Road intersections and endpoints.
@@ -77,6 +79,13 @@ pub struct RoadGraph {
     pub edges: Vec<RoadEdge>,
     /// Enclosed city blocks extracted by [`crate::polygons::extract_blocks`].
     pub blocks: Vec<CityBlock>,
+    /// Which functions the graph is derived with from here on:
+    /// [`crate::rationalize_graph`], [`crate::extract_blocks`] and
+    /// [`crate::extract_lots`] all follow it. [`crate::generate_roads`]
+    /// sets it from [`crate::TensorConfig::math`]; a graph built by hand
+    /// starts at [`MathMode::Platform`].
+    #[serde(default, skip_serializing_if = "MathMode::is_platform")]
+    pub math: MathMode,
 }
 
 impl RoadGraph {

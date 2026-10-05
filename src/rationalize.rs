@@ -22,6 +22,7 @@ use symbios_ground::HeightMap;
 
 use crate::geometry::closest_point_on_segment;
 use crate::graph::{EdgeId, NodeId, RoadGraph, RoadType};
+use crate::math::MathMode;
 use crate::topology::{
     compute_active_degrees, extract_arteries, extract_chains, extract_chains_any_type,
 };
@@ -207,7 +208,12 @@ fn rationalize_artery(
         RoadType::Major => config.major_fillet_radius,
         RoadType::Minor => config.minor_fillet_radius,
     };
-    let smoothed = fillet_corners(&simplified, fillet_radius, config.fillet_segments);
+    let smoothed = fillet_corners_with(
+        &simplified,
+        fillet_radius,
+        config.fillet_segments,
+        graph.math,
+    );
     if smoothed.len() < 2 {
         return;
     }
@@ -289,7 +295,12 @@ fn rationalize_polyline(
         RoadType::Major => config.major_fillet_radius,
         RoadType::Minor => config.minor_fillet_radius,
     };
-    let smoothed = fillet_corners(&simplified, fillet_radius, config.fillet_segments);
+    let smoothed = fillet_corners_with(
+        &simplified,
+        fillet_radius,
+        config.fillet_segments,
+        graph.math,
+    );
     if smoothed.len() < 2 {
         return;
     }
@@ -700,8 +711,20 @@ fn rdp_recurse(points: &[Vec2], start: usize, end: usize, tol_sq: f32, keep: &mu
 ///
 /// For each interior vertex B with neighbours A and C, the fillet arc is
 /// tangent to segments AB and BC at a distance of `radius · tan(half_angle)`
-/// from B, clamped so adjacent fillets don't overlap.
+/// from B, clamped so adjacent fillets don't overlap. The platform's `acos`
+/// and `tan` - see [`fillet_corners_with`].
 pub fn fillet_corners(points: &[Vec2], radius: f32, segments: u32) -> Vec<Vec2> {
+    fillet_corners_with(points, radius, segments, MathMode::Platform)
+}
+
+/// [`fillet_corners`] with `math`'s `acos` and `tan` (see [`crate::math`]):
+/// [`rationalize_graph`] fillets with the graph's own [`RoadGraph::math`].
+pub fn fillet_corners_with(
+    points: &[Vec2],
+    radius: f32,
+    segments: u32,
+    math: MathMode,
+) -> Vec<Vec2> {
     if points.len() <= 2 || radius <= 0.0 || segments == 0 {
         return points.to_vec();
     }
@@ -748,8 +771,8 @@ pub fn fillet_corners(points: &[Vec2], radius: f32, segments: u32) -> Vec<Vec2> 
             continue;
         }
 
-        let half_angle = cos_theta.acos() * 0.5;
-        let tan_half = half_angle.tan();
+        let half_angle = math.acos(cos_theta) * 0.5;
+        let tan_half = math.tan(half_angle);
         if tan_half.abs() < 1e-6 {
             result.push(b);
             continue;

@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use symbios_ground::HeightMap;
 
 use crate::graph::{RoadGraph, RoadType};
+use crate::math::MathMode;
 use crate::spatial::{SpatialHash, TraceResult, resolve_trace_step};
 use crate::tensor::{TensorField, TensorFieldConfig};
 
@@ -142,6 +143,13 @@ pub struct TensorConfig {
     /// where a trace snaps onto a node beside it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub keep_out: Vec<KeepOut>,
+    /// Whose `sin`, `cos`, `tan`, `acos` and `atan2` the layout is derived
+    /// with (see [`crate::math`]): the trace's jitter here, and - recorded
+    /// as [`RoadGraph::math`] on the graph returned - the rationalization,
+    /// block extraction and lot subdivision after it.
+    /// [`MathMode::Portable`] derives the same layout on every platform.
+    #[serde(default, skip_serializing_if = "MathMode::is_platform")]
+    pub math: MathMode,
 }
 
 /// A disc the tracer keeps every street out of ([`TensorConfig::keep_out`]),
@@ -174,6 +182,7 @@ impl Default for TensorConfig {
             water_level: f32::NEG_INFINITY,
             field: TensorFieldConfig::default(),
             keep_out: Vec::new(),
+            math: MathMode::Platform,
         }
     }
 }
@@ -242,8 +251,11 @@ pub fn generate_roads(
         }
     }
 
-    let field = TensorField::with_config(heightmap, config.field.clone());
-    let mut graph = RoadGraph::default();
+    let field = TensorField::with_config(heightmap, config.field.clone()).with_math(config.math);
+    let mut graph = RoadGraph {
+        math: config.math,
+        ..RoadGraph::default()
+    };
 
     let world_w = heightmap.world_width();
     let world_d = heightmap.world_depth();

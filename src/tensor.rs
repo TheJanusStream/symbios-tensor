@@ -39,6 +39,8 @@ use glam::{Vec2, Vec3};
 use serde::{Deserialize, Serialize};
 use symbios_ground::HeightMap;
 
+use crate::math::MathMode;
+
 /// Configuration for [`TensorField`] sampling.
 ///
 /// Slope (the magnitude of the normal's XZ projection) controls a smooth
@@ -315,6 +317,8 @@ pub struct TensorField<'a> {
     /// `heightmap`, which stays the one the tracer reads heights from.
     smoothed: Option<HeightMap>,
     config: TensorFieldConfig,
+    /// Whose `sin` and `cos` the jitter turns directions with.
+    math: MathMode,
     fallback_warned: AtomicBool,
 }
 
@@ -332,8 +336,16 @@ impl<'a> TensorField<'a> {
             heightmap,
             smoothed,
             config,
+            math: MathMode::Platform,
             fallback_warned: AtomicBool::new(false),
         }
+    }
+
+    /// The same field with its jitter turned by `math`'s functions (see
+    /// [`crate::math`]); the default is [`MathMode::Platform`].
+    pub fn with_math(mut self, math: MathMode) -> Self {
+        self.math = math;
+        self
     }
 
     /// Samples the tensor field, returning `(major, minor)` unit direction vectors.
@@ -412,8 +424,8 @@ impl<'a> TensorField<'a> {
         // Apply low-frequency directional jitter (deterministic per world point).
         let minor = if cfg.jitter_amplitude.abs() > 0.0 {
             let phase = world_x * cfg.jitter_frequency + world_z * cfg.jitter_frequency * 1.7320508;
-            let angle = cfg.jitter_amplitude * phase.sin();
-            rotate(blended_minor, angle)
+            let angle = cfg.jitter_amplitude * self.math.sin(phase);
+            rotate(blended_minor, angle, self.math)
         } else {
             blended_minor
         };
@@ -446,8 +458,8 @@ fn nearest_axis(dir: Vec2) -> Vec2 {
     }
 }
 
-fn rotate(v: Vec2, angle: f32) -> Vec2 {
-    let (s, c) = angle.sin_cos();
+fn rotate(v: Vec2, angle: f32, math: MathMode) -> Vec2 {
+    let (s, c) = math.sin_cos(angle);
     Vec2::new(v.x * c - v.y * s, v.x * s + v.y * c)
 }
 

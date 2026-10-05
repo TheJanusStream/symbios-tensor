@@ -15,7 +15,8 @@ use crate::graph::{CityBlock, EdgeId, NodeId, RoadGraph};
 /// incoming direction at each node, which traces faces in **clockwise**
 /// (CW) winding order. CW polygons have negative signed area, identifying
 /// them as bounded interior blocks. The unbounded exterior face winds CCW
-/// and is filtered out by the area sign check.
+/// and is filtered out by the area sign check. Edges are ordered by angle
+/// with the graph's own [`RoadGraph::math`].
 pub fn extract_blocks(graph: &mut RoadGraph) {
     graph.blocks.clear();
 
@@ -83,7 +84,7 @@ pub fn extract_blocks(graph: &mut RoadGraph) {
 
             let incoming_dir =
                 graph.nodes[prev as usize].position - graph.nodes[curr as usize].position;
-            let incoming_angle = incoming_dir.y.atan2(incoming_dir.x);
+            let incoming_angle = graph.math.atan2(incoming_dir.y, incoming_dir.x);
 
             let next = pick_next_face_edge(neighbours, graph, curr, prev, incoming_angle);
 
@@ -145,7 +146,7 @@ fn pick_next_face_edge(
         }
 
         let d = graph.nodes[to as usize].position - origin;
-        let out_angle = d.y.atan2(d.x);
+        let out_angle = graph.math.atan2(d.y, d.x);
 
         // Counter-clockwise delta from incoming_angle, in (0, TAU]
         let mut delta = (out_angle - incoming_angle).rem_euclid(std::f32::consts::TAU);
